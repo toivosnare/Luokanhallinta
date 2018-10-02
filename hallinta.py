@@ -1,12 +1,10 @@
 '''
-TODO:   commands:
-            automatic class file creation (nmap/ping),
-            file transfer,
-            SteelBeasts;
-        host state;
+TODO:   SteelBeasts commands;
         multi threading;
+        automatic class file creation (nmap/ping);
+        host state;
         UI;
-        comments;
+        comments and documentation;
         this.
 '''
 
@@ -28,6 +26,7 @@ class Host:
         self.row = int(row)
         self.selected = IntVar()
         self.session_id = self.get_session_id()
+        print(self)
 
     def info_frame(self, host_frame):
         '''
@@ -130,10 +129,10 @@ class Host:
         return (next(csv_reader)[0]) # Return first entry
 
     def __repr__(self):
-        return "Host('{self.hostname}', '{self.username}', '{self.password}', '{self.mac}', '{self.row}', '{self.column}')".format(self=self)
+        return "Host('{self.hostname}', '{self.username}', '{self.password}', '{self.mac}', '{self.row}', '{self.column}', '{self.session_id}')".format(self=self)
 
 class Command:
-    menus = ["Luokka", "Komennot"]
+    menus = ["Valitse", "Tietokone", "VBS3", "SteelBeasts", "Muut"]
 
     def __init__(self, name):
         self.name = name
@@ -210,7 +209,7 @@ class SelectX(Command):
                 host.selected.set(1)
 
 class CustomCommand(Command):
-    def __init__(self, name, command="", arguments="", interactive=0):
+    def __init__(self, name, command="", arguments="", interactive=0, **kwargs):
         super().__init__(name)
         self.command = StringVar()
         self.command.set(command)
@@ -218,6 +217,7 @@ class CustomCommand(Command):
         self.arguments.set(arguments)
         self.interactive = IntVar()
         self.interactive.set(interactive)
+        self.kwargs = kwargs
 
     def clicked(self):
         f = super().clicked()
@@ -229,7 +229,7 @@ class CustomCommand(Command):
         Button(f, text="Aja", command=self.run).pack(anchor=W)
 
     def run(self):
-        Host.run(self.command.get(), self.interactive.get(), arguments=self.arguments.get())
+        Host.run(self.command.get(), self.interactive.get(), arguments=self.arguments.get(), **self.kwargs)
 
 class UpdateCommand(Command):
     def __init__(self, name, default_file_path):
@@ -287,6 +287,8 @@ def main():
     from os.path import normpath
     global host_frame, properties_frame
     root = Tk()
+    root.title("Luokanhallinta")
+    root.geometry("640x480")
     host_frame = LabelFrame(root, text="Luokka")
     host_frame.pack(side=LEFT, fill=BOTH, expand="yes")
     properties_frame = LabelFrame(root, text="Ominaisuudet")
@@ -295,18 +297,21 @@ def main():
     Command.init_commands(menubar)
     root.config(menu=menubar)
 
-    UpdateCommand("Päivitä...", "luokka.csv").add_to_menu(0)
     SelectAll("Kaikki").add_to_menu(0)
     Deselect("Ei mitään").add_to_menu(0)
     InvertSelection("Käänteinen").add_to_menu(0)
     SelectX("Valitse tietty...").add_to_menu(0)
 
-    BootCommand("Käynnistä tietokone").add_to_menu(1)
-    CustomCommand("Käynnistä tietokone uudelleen...", "shutdown", "/r").add_to_menu(1)
-    CustomCommand("Sammuta tietokone...", "shutdown", "/s").add_to_menu(1)
-    CustomCommand("Käynnistä VBS3...", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe", interactive=1).add_to_menu(1)
-    CustomCommand("Sulje VBS3...", "taskkill", "/im VBS3_64.exe /F").add_to_menu(1)
-    CustomCommand("Aja...").add_to_menu(1)
+    BootCommand("Käynnistä").add_to_menu(1)
+    CustomCommand("Käynnistä uudelleen...", "shutdown", "/r").add_to_menu(1)
+    CustomCommand("Sammuta...", "shutdown", "/s").add_to_menu(1)
+
+    CustomCommand("Käynnistä...", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe", interactive=1).add_to_menu(2)
+    CustomCommand("Synkkaa Addonit...", "robocopy", arguments=normpath("//PSPR-Storage/Addons") + " " + normpath('"C:/Program Files/Bohemia Interactive Simulations/VBS3 3.9.0.FDF EZYQC_FI/mycontent/addons"')).add_to_menu(2)
+    CustomCommand("Sulje...", "taskkill", "/im VBS3_64.exe /F").add_to_menu(2)
+
+    UpdateCommand("Päivitä luokka...", "luokka.csv").add_to_menu(4)
+    CustomCommand("Aja...").add_to_menu(4)
 
     Host.populate(normpath("luokka.csv")) 
     Host.display()
