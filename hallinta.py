@@ -26,14 +26,13 @@ class Host:
         self.row = int(row)
         self.selected = IntVar()
         self.session_id = self.get_session_id()
-        print(self)
 
     def info_frame(self, host_frame):
         '''
         Return the frame object that gets displayed in the host_frame
         '''
         f = Frame(host_frame, padx=5, pady=5, bg="lightgray")
-        self.photo = PhotoImage(file="computer.png")
+        self.photo = PhotoImage(file="tietokone.png")
         Button(f, image=self.photo, padx=0, pady=0, bg="lightgray", bd=0, command=self.display_properties).pack()
         Checkbutton(f, text=self.hostname, variable=self.selected, bg="lightgray", padx=0, pady=0).pack()
         return f
@@ -192,10 +191,10 @@ class SelectX(Command):
     def clicked(self):
         f = super().clicked()
         Label(f, text="Sarake:").pack(anchor=W)
-        Entry(f, textvariable=self.column).pack(anchor=W)
+        Entry(f, textvariable=self.column, width=10).pack(anchor=W)
         Button(f, text="Valitse", command=self.select_column).pack(anchor=W)
         Label(f, text="Rivi:").pack(anchor=W)
-        Entry(f, textvariable=self.row).pack(anchor=W)
+        Entry(f, textvariable=self.row, width=10).pack(anchor=W)
         Button(f, text="Valitse", command=self.select_row).pack(anchor=W)
 
     def select_column(self):
@@ -209,7 +208,7 @@ class SelectX(Command):
                 host.selected.set(1)
 
 class CustomCommand(Command):
-    def __init__(self, name, command="", arguments="", interactive=0, **kwargs):
+    def __init__(self, name, command="", arguments="", interactive=0, can_be_changed=True, **kwargs):
         super().__init__(name)
         self.command = StringVar()
         self.command.set(command)
@@ -217,15 +216,17 @@ class CustomCommand(Command):
         self.arguments.set(arguments)
         self.interactive = IntVar()
         self.interactive.set(interactive)
+        self.can_be_changed = can_be_changed
         self.kwargs = kwargs
 
     def clicked(self):
         f = super().clicked()
         Label(f, text="Komento:").pack(anchor=W)
-        Entry(f, textvariable=self.command).pack(anchor=W)
+        Entry(f, textvariable=self.command, width=50).pack(anchor=W)
         Label(f, text="Parametrit:").pack(anchor=W)
-        Entry(f, textvariable=self.arguments).pack(anchor=W)
-        Checkbutton(f, text="Interaktiivinen", variable=self.interactive).pack()
+        Entry(f, textvariable=self.arguments, width=50).pack(anchor=W)
+        if self.can_be_changed:
+            Checkbutton(f, text="Interaktiivinen", variable=self.interactive).pack()
         Button(f, text="Aja", command=self.run).pack(anchor=W)
 
     def run(self):
@@ -240,7 +241,7 @@ class UpdateCommand(Command):
     def clicked(self):
         f = super().clicked()
         Label(f, text="Luokkatiedoston polku:").pack(anchor=W)
-        Entry(f, textvariable=self.file_path).pack(anchor=W)
+        Entry(f, textvariable=self.file_path, width=50).pack(anchor=W)
         Button(f, text="Päivitä", command=self.run).pack(anchor=W)
     
     def run(self):
@@ -250,6 +251,26 @@ class UpdateCommand(Command):
 class BootCommand(Command):
     def clicked(self):
         Host.wake_up()
+
+class CopyCommand(Command):
+    def __init__(self, name, source, destination):
+        super().__init__(name)
+        self.source = StringVar()
+        self.source.set(source)
+        self.destination = StringVar()
+        self.destination.set(destination)
+
+    def clicked(self):
+        f = super().clicked()
+        Label(f, text="Lähde:", width=50).pack(anchor=W)
+        Entry(f, textvariable=self.source, width=50).pack(anchor=W)
+        Label(f, text="Kohde:", width=50).pack(anchor=W)
+        Entry(f, textvariable=self.destination, width=50).pack(anchor=W)
+        Button(f, text="Kopioi", command=self.run).pack(anchor=W)
+
+    def run(self):
+        args = self.source.get() + " " + self.destination.get()
+        Host.run("robocopy", interactive=False, arguments=args)
 
 def run(host, username, password, command, session_id=0, **kwargs):
     from pypsexec.client import Client
@@ -303,12 +324,15 @@ def main():
     SelectX("Valitse tietty...").add_to_menu(0)
 
     BootCommand("Käynnistä").add_to_menu(1)
-    CustomCommand("Käynnistä uudelleen...", "shutdown", "/r").add_to_menu(1)
-    CustomCommand("Sammuta...", "shutdown", "/s").add_to_menu(1)
+    BatchCommand("Käynnistä uudelleen", "shutdown", arguments="/r").add_to_menu(1)
+    BatchCommand("Sammuta", "shutdown", arguments="/s").add_to_menu(1)
 
-    CustomCommand("Käynnistä...", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe", interactive=1).add_to_menu(2)
-    CustomCommand("Synkkaa Addonit...", "robocopy", arguments=normpath("//PSPR-Storage/Addons") + " " + normpath('"C:/Program Files/Bohemia Interactive Simulations/VBS3 3.9.0.FDF EZYQC_FI/mycontent/addons"')).add_to_menu(2)
-    CustomCommand("Sulje...", "taskkill", "/im VBS3_64.exe /F").add_to_menu(2)
+    CustomCommand("Käynnistä...", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe", interactive=1, can_be_changed=False).add_to_menu(2)
+    CopyCommand("Synkkaa Addonit...", normpath("//PSPR-Storage/Addons"), normpath('"C:/Program Files/Bohemia Interactive Simulations/VBS3 3.9.0.FDF EZYQC_FI/mycontent/addons"')).add_to_menu(2)
+    BatchCommand("Sulje", "taskkill", arguments="/im VBS3_64.exe /F").add_to_menu(2)
+
+    #CustomCommand("Käynnistä...", "C:\Program Files\eSim Games")
+    #BatchCommand("Sulje")
 
     UpdateCommand("Päivitä luokka...", "luokka.csv").add_to_menu(4)
     CustomCommand("Aja...").add_to_menu(4)
