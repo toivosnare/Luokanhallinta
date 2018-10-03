@@ -1,5 +1,7 @@
 '''
-TODO:   automatic class file creation (nmap/ping);
+TODO:   SteelBeasts commands;
+        multi threading;
+        automatic class file creation (nmap/ping);
         host state;
         UI;
         comments and documentation;
@@ -80,10 +82,6 @@ class Host:
         undefined_hosts = []
         for host in cls.host_list:
             if host.row == 0 or host.column == 0:
-                print("Undefined grid position: " + str(host))
-                undefined_hosts.append(host)
-            elif host_frame.grid_slaves(row=host.row, column=host.column):
-                print("Duplicate grid position: " + str(host))
                 undefined_hosts.append(host)
             else:
                 host.info_frame(host_frame).grid(row=host.row, column=host.column, padx=5, pady=5)
@@ -96,15 +94,12 @@ class Host:
         '''
         Run a command on all selected hosts
         '''
-        import threading
         for host in cls.host_list:
             if host.selected.get():
                 if interactive:
-                    #run(host.hostname, host.username, host.password, command, host.session_id, **kwargs)
-                    threading.Thread(target=run, args=(host.hostname, host.username, host.password, command, host.session_id), kwargs=kwargs).start()
+                    run(host.hostname, host.username, host.password, command, session_id=host.session_id, **kwargs)
                 else:
-                    #print(run(host.hostname, host.username, host.password, command, **kwargs))
-                    threading.Thread(target=run, args=(host.hostname, host.username, host.password, command, None, True), kwargs=kwargs).start()
+                    print(run(host.hostname, host.username, host.password, command, session_id=0, **kwargs))
 
     @classmethod
     def wake_up(cls):
@@ -267,9 +262,9 @@ class CopyCommand(Command):
 
     def clicked(self):
         f = super().clicked()
-        Label(f, text="Lähde:").pack(anchor=W)
+        Label(f, text="Lähde:", width=50).pack(anchor=W)
         Entry(f, textvariable=self.source, width=50).pack(anchor=W)
-        Label(f, text="Kohde:").pack(anchor=W)
+        Label(f, text="Kohde:", width=50).pack(anchor=W)
         Entry(f, textvariable=self.destination, width=50).pack(anchor=W)
         Button(f, text="Kopioi", command=self.run).pack(anchor=W)
 
@@ -277,7 +272,7 @@ class CopyCommand(Command):
         args = self.source.get() + " " + self.destination.get()
         Host.run("robocopy", interactive=False, arguments=args)
 
-def run(host, username, password, command, session_id=None, print_std=False, **kwargs):
+def run(host, username, password, command, session_id=0, **kwargs):
     from pypsexec.client import Client
     from pypsexec.exceptions import PAExecException
     from smbprotocol.exceptions import SMBAuthenticationError
@@ -298,9 +293,7 @@ def run(host, username, password, command, session_id=None, print_std=False, **k
             print("'{}' started on {} with PID {}".format(command, host, pid))
         else:
             stdout, stderr, pid = c.run_executable(command, **kwargs)
-            if print_std:
-                print(stderr.decode(encoding='windows-1252'))
-                print(stdout.decode(encoding='windows-1252'))
+            print(stderr.decode("utf-8"))
             return stdout.decode(encoding='windows-1252')
     except PAExecException as e:
         print("Virheellinen komento - " + str(e))
@@ -316,7 +309,7 @@ def main():
     global host_frame, properties_frame
     root = Tk()
     root.title("Luokanhallinta")
-    root.geometry("1280x720")
+    root.geometry("640x480")
     host_frame = LabelFrame(root, text="Luokka")
     host_frame.pack(side=LEFT, fill=BOTH, expand="yes")
     properties_frame = LabelFrame(root, text="Ominaisuudet")
@@ -338,11 +331,11 @@ def main():
     CopyCommand("Synkkaa Addonit...", normpath("//PSPR-Storage/Addons"), normpath('"C:/Program Files/Bohemia Interactive Simulations/VBS3 3.9.0.FDF EZYQC_FI/mycontent/addons"')).add_to_menu(2)
     BatchCommand("Sulje", "taskkill", arguments="/im VBS3_64.exe /F").add_to_menu(2)
 
-    CustomCommand("Käynnistä...", "C:\Program Files\eSim Games\SB Pro FI\Release\SBPro64CM.exe", interactive=1, can_be_changed=False).add_to_menu(3)
-    BatchCommand("Sulje", "taskkill", arguments="/im SBPro64CM.exe /F").add_to_menu(3)
+    #CustomCommand("Käynnistä...", "C:\Program Files\eSim Games")
+    #BatchCommand("Sulje")
 
     UpdateCommand("Päivitä luokka...", "luokka.csv").add_to_menu(4)
-    CustomCommand("Aja...", print_std=True).add_to_menu(4)
+    CustomCommand("Aja...").add_to_menu(4)
 
     Host.populate(normpath("luokka.csv")) 
     Host.display()
