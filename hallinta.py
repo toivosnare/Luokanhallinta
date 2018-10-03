@@ -1,12 +1,5 @@
-'''
-TODO:   automatic class file creation (nmap/ping);
-        host state;
-        UI;
-        comments and documentation;
-        this.
-'''
-
 from tkinter import *
+
 
 class Host:
     '''
@@ -135,6 +128,7 @@ class Host:
     def __repr__(self):
         return "Host('{self.hostname}', '{self.username}', '{self.password}', '{self.mac}', '{self.row}', '{self.column}', '{self.session_id}')".format(self=self)
 
+
 class Command:
     menus = ["Valitse", "Tietokone", "VBS3", "SteelBeasts", "Muut"]
 
@@ -159,6 +153,7 @@ class Command:
     def add_to_menu(self, menu_index):
         self.menus[menu_index].add_command(label=self.name, command=self.clicked)
 
+
 class BatchCommand(Command):
     def __init__(self, name, command, interactive=False, **kwargs):
         super().__init__(name)
@@ -169,15 +164,18 @@ class BatchCommand(Command):
     def clicked(self):
         Host.run(self.command, self.interactive, **self.kwargs)
 
+
 class SelectAll(Command):
     def clicked(self):
         for host in Host.host_list:
             host.selected.set(1)
 
+
 class Deselect(Command):
     def clicked(self):
         for host in Host.host_list:
             host.selected.set(0)
+
 
 class InvertSelection(Command):
     def clicked(self):
@@ -186,6 +184,7 @@ class InvertSelection(Command):
                 host.selected.set(0)
             else:
                 host.selected.set(1)
+
 
 class SelectX(Command):
     def __init__(self, name):
@@ -212,6 +211,7 @@ class SelectX(Command):
             if host.row == int(self.row.get()):
                 host.selected.set(1)
 
+
 class CustomCommand(Command):
     def __init__(self, name, command="", arguments="", interactive=0, can_be_changed=True, **kwargs):
         super().__init__(name)
@@ -237,6 +237,7 @@ class CustomCommand(Command):
     def run(self):
         Host.run(self.command.get(), self.interactive.get(), arguments=self.arguments.get(), **self.kwargs)
 
+
 class UpdateCommand(Command):
     def __init__(self, name, default_file_path):
         super().__init__(name)
@@ -253,9 +254,11 @@ class UpdateCommand(Command):
         Host.populate(self.file_path.get())
         Host.display()
 
+
 class BootCommand(Command):
     def clicked(self):
         Host.wake_up()
+
 
 class CopyCommand(Command):
     def __init__(self, name, source, destination):
@@ -276,6 +279,7 @@ class CopyCommand(Command):
     def run(self):
         args = self.source.get() + " " + self.destination.get()
         Host.run("robocopy", interactive=False, arguments=args)
+
 
 def run(host, username, password, command, session_id=None, print_std=False, **kwargs):
     from pypsexec.client import Client
@@ -307,6 +311,7 @@ def run(host, username, password, command, session_id=None, print_std=False, **k
     finally:
         c.remove_service()
         c.disconnect()
+
 
 def main():
     '''
@@ -347,6 +352,7 @@ def main():
     Host.populate(normpath("luokka.csv")) 
     Host.display()
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
