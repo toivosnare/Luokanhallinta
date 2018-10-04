@@ -98,7 +98,7 @@ class Host:
 
     def get_session_id(self):
         '''Get host's active session id.'''
-        stdout = run("VKY00093", "uzer", "", "powershell", arguments='-command "Get-Process powershell | Select-Object SessionId"')
+        stdout = run(self.hostname, self.username, self.password, "powershell", arguments='-command "Get-Process powershell | Select-Object SessionId"')
         for char in stdout.split():
             if char.isdigit():
                 return int(char)
