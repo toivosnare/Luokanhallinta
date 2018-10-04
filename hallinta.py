@@ -14,14 +14,22 @@ class Host:
         self.column = int(column)
         self.row = int(row)
         self.selected = IntVar()
-        self.session_id = self.get_session_id()
+        self.status = ping(self.hostname)
+        if self.status:
+            self.session_id = self.get_session_id()
+        else:
+            self.session_id = 0
 
     def info_frame(self, host_frame):
         '''Return the frame object that gets displayed in the host_frame.'''
+        if self.status:
+            fg = "green"
+        else:
+            fg = "red"
         f = Frame(host_frame, padx=5, pady=5, bg="lightgray")
         self.photo = PhotoImage(file="tietokone.png")
         Button(f, image=self.photo, padx=0, pady=0, bg="lightgray", bd=0, command=self.display_properties).pack()
-        Checkbutton(f, text=self.hostname, variable=self.selected, bg="lightgray", padx=0, pady=0).pack()
+        Checkbutton(f, text=self.hostname, variable=self.selected, bg="lightgray", fg=fg, padx=0, pady=0).pack()
         return f
 
     def display_properties(self):
@@ -37,6 +45,7 @@ class Host:
         Label(f, text="Rivi: " + str(self.row)).pack(anchor=W)
         Label(f, text="Sarake: " + str(self.column)).pack(anchor=W)
         Label(f, text="Sessio ID: " + str(self.session_id)).pack(anchor=W)
+        Label(f, text="Status: " + str(self.status)).pack(anchor=W)
         f.pack()
 
     @classmethod
