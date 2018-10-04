@@ -98,17 +98,11 @@ class Host:
 
     def get_session_id(self):
         '''Get host's active session id.'''
-        stdout = run(self.hostname, self.username, self.password, "powershell", arguments='-command "Get-Process powershell | Select-Object SessionId"')
+        stdout = run(self.hostname, self.username, self.password, "powershell", print_std=False, arguments='-command "Get-Process powershell | Select-Object SessionId"')
         for char in stdout.split():
-            if char.isdigit():
+            if char.isdigit() and not char == "0":
                 return int(char)
-
-    def get_mac(self):
-        '''Get host's mac adress.'''
-        from csv import reader
-        stdout = run(self.hostname, self.username, self.password, "getmac", arguments="/FO CSV /NH") # Get mac adress from host formatted in csv without the header row
-        csv_reader = reader(stdout, delimiter=",")
-        return (next(csv_reader)[0]) # Return first entry
+        print("No active session???")
 
     def __repr__(self):
         return "Host('{self.hostname}', '{self.username}', '{self.password}', '{self.mac}', '{self.row}', '{self.column}', '{self.session_id}')".format(self=self)
@@ -269,7 +263,54 @@ class CopyCommand(Command):
         Host.run("robocopy", interactive=False, arguments=args, **self.kwargs)
 
 
-def run(host, username, password, command, session_id=None, print_std=True, **kwargs):
+class CreateClassFileCommand(Command):
+    def __init__(self, name, file_path):
+        super().__init__(name)
+        self.address = StringVar()
+        self.file_path = StringVar()
+        self.file_path.set(file_path)
+        self.username = StringVar()
+        self.password = StringVar()
+
+    def clicked(self):
+        f = super().clicked()
+        Label(f, text="Kohde:").pack(anchor=W)
+        Entry(f, textvariable=self.address, width=50).pack(anchor=W)
+        Label(f, text="Polku:").pack(anchor=W)
+        Entry(f, textvariable=self.file_path, width=50).pack(anchor=W)
+        Label(f, text="Käyttäjänimi:").pack(anchor=W)
+        Entry(f, textvariable=self.username, width=50).pack(anchor=W)
+        Label(f, text="Salasana:").pack(anchor=W)
+        Entry(f, textvariable=self.password, width=50, show="*").pack(anchor=W)
+        Button(f, text="Luo", command=self.start).pack(anchor=W)
+
+    def start(self):
+        from threading import Thread
+        Thread(target=self.run).start()
+
+    def run(self):
+        from ipaddress import IPv4Network
+        from csv import writer, reader
+        with open(self.file_path.get(), "wt", encoding="utf-8") as f:
+            csv_writer = writer(f, delimiter=" ")
+            for ip in IPv4Network(self.address.get()):
+                if ping(str(ip)):
+                    try:
+                        mac = (next(reader(run(str(ip), self.username.get(), self.password.get(), "getmac", arguments="/FO CSV /NH", timeout=1, print_std=False), delimiter=","))[0])
+                        hostname = run(str(ip), self.username.get(), self.password.get(), "hostname", timeout=1, print_std=False).strip()
+                        csv_writer.writerow((hostname, self.username.get(), self.password.get(), mac, "0", "0"))
+                    except:
+                        continue
+
+
+def ping(host, count=1, timeout=20):
+    from os import system
+    if system("ping -n {} -w {} {}".format(count, timeout, host)) == 0:
+        return True
+    return False
+
+
+def run(host, username, password, command, session_id=None, print_std=True, timeout=0, **kwargs):
     '''Run a command on a specific host.'''
     from pypsexec.client import Client
     from pypsexec.exceptions import PAExecException
@@ -287,10 +328,10 @@ def run(host, username, password, command, session_id=None, print_std=True, **kw
     try:
         c.create_service()
         if session_id:
-            stdout, stderr, pid = c.run_executable(command, interactive=True, interactive_session=session_id, use_system_account=True, asynchronous=True, **kwargs)
+            stdout, stderr, pid = c.run_executable(command, interactive=True, interactive_session=session_id, use_system_account=True, asynchronous=True, timeout_seconds=timeout, **kwargs)
             print("'{}' started on {} with PID {}".format(command, host, pid))
         else:
-            stdout, stderr, pid = c.run_executable(command, **kwargs)
+            stdout, stderr, pid = c.run_executable(command, timeout_seconds=timeout, **kwargs)
             if print_std:
                 print(stderr.decode(encoding='windows-1252'))
                 print(stdout.decode(encoding='windows-1252'))
@@ -334,6 +375,7 @@ def main():
     BatchCommand("Sulje", "taskkill", arguments="/im SBPro64CM.exe /F").add_to_menu(3)
 
     UpdateCommand("Päivitä luokka...", "luokka.csv").add_to_menu(4)
+    CreateClassFileCommand("Luo luokkatiedosto...", "testi.csv").add_to_menu(4)
     CopyCommand("Siirrä tiedostoja...", "", "").add_to_menu(4)
     CustomCommand("Aja...").add_to_menu(4)
 
