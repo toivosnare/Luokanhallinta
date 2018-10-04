@@ -66,7 +66,7 @@ class Host:
     def display(cls):
         '''Display hosts inside the host_frame.
 
-        Hosts with either their row or column defined as 0 get displayed at the bottom on their own row.
+        Hosts with undefined and/or duplicate grid positions get displayed at the bottom on their own row.
         '''
         global host_frame
         for slave in host_frame.grid_slaves():
@@ -124,7 +124,7 @@ class Command:
         self.name = name
 
     def clicked(self):
-        '''Method which should be called by the children of the Command class to get the basic functionality of setting up the properties frame.'''
+        '''Method which should get called by the children of the Command class to get the basic functionality of setting up the properties frame.'''
         global properties_frame
         for slave in properties_frame.slaves():
             slave.destroy()
@@ -145,6 +145,7 @@ class Command:
 
 
 class BatchCommand(Command):
+    '''Basic Batch command to run on a remote host.'''
     def __init__(self, name, command, interactive=False, **kwargs):
         super().__init__(name)
         self.command = command
@@ -156,18 +157,24 @@ class BatchCommand(Command):
 
 
 class SelectAll(Command):
+    '''Selects all hosts.'''
     def clicked(self):
         for host in Host.host_list:
             host.selected.set(1)
 
 
 class Deselect(Command):
+    '''Deselects all hosts.'''
     def clicked(self):
         for host in Host.host_list:
             host.selected.set(0)
 
 
 class InvertSelection(Command):
+    '''Inverts the selection.
+    
+    I mean what did you expect?
+    '''
     def clicked(self):
         for host in Host.host_list:
             if host.selected.get():
@@ -177,6 +184,7 @@ class InvertSelection(Command):
 
 
 class SelectX(Command):
+    '''Selects a specific row or column of hosts.'''
     def __init__(self, name):
         super().__init__(name)
         self.column = StringVar()
@@ -203,6 +211,7 @@ class SelectX(Command):
 
 
 class CustomCommand(Command):
+    '''Runs a custom command with graphical entry boxes for the command and arguments.'''
     def __init__(self, name, command="", arguments="", interactive=0, can_be_changed=True, **kwargs):
         super().__init__(name)
         self.command = StringVar()
@@ -229,10 +238,11 @@ class CustomCommand(Command):
 
 
 class UpdateCommand(Command):
-    def __init__(self, name, default_file_path):
+    '''Populates and displays the hosts from a specified class file.'''
+    def __init__(self, name, file_path):
         super().__init__(name)
         self.file_path = StringVar()
-        self.file_path.set(default_file_path)
+        self.file_path.set(file_path)
 
     def clicked(self):
         f = super().clicked()
@@ -246,11 +256,13 @@ class UpdateCommand(Command):
 
 
 class BootCommand(Command):
+    '''Wakes up the whole class through WOL.'''
     def clicked(self):
         Host.wake_up()
 
 
 class CopyCommand(Command):
+    '''Generic copy command with graphical entry boxes for the source and destination paths.'''
     def __init__(self, name, source, destination, **kwargs):
         super().__init__(name)
         self.source = StringVar()
@@ -273,6 +285,11 @@ class CopyCommand(Command):
 
 
 class CreateClassFileCommand(Command):
+    '''Creates .csv class file.
+    
+    First scan trough specified network pinging all hosts.
+    Responding IPs get also requested with their mac address and hostname through psexec.
+    '''
     def __init__(self, name, file_path):
         super().__init__(name)
         self.address = StringVar()
@@ -294,6 +311,7 @@ class CreateClassFileCommand(Command):
         Button(f, text="Luo", command=self.start).pack(anchor=W)
 
     def start(self):
+        '''I'm sure there is a better way to do this.'''
         from threading import Thread
         Thread(target=self.run).start()
 
@@ -313,6 +331,7 @@ class CreateClassFileCommand(Command):
 
 
 def ping(host, count=1, timeout=20):
+    '''This ping.'''
     from os import system
     if system("ping -n {} -w {} {}".format(count, timeout, host)) == 0:
         return True
