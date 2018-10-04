@@ -347,6 +347,7 @@ def main():
     BatchCommand("Sulje", "taskkill", arguments="/im SBPro64CM.exe /F").add_to_menu(3)
 
     UpdateCommand("Päivitä luokka...", "luokka.csv").add_to_menu(4)
+    CopyCommand("Siirrä tiedostoja...", "", "").add_to_menu(4)
     CustomCommand("Aja...", print_std=True).add_to_menu(4)
 
     Host.populate(normpath("luokka.csv")) 

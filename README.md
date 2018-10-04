@@ -1,5 +1,5 @@
 TODO:
-    automatic class file creation (nmap/ping);
-    host state;
-    UI;
-    comments and documentation;
+    automatic class file creation (nmap/ping),
+    host state,
+    UI,
+    comments and documentation
