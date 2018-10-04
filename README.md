@@ -1,3 +1,2 @@
-TODO:
-    UI,
-    comments and documentation
+REQUIREMENTS: python3, pypsexec, wakeonlan
+TODO: UI, comments and documentation
