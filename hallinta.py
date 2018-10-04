@@ -2,9 +2,7 @@ from tkinter import *
 
 
 class Host:
-    '''
-    A class to keep track of all hosts and perform actions on them
-    '''
+    '''Class to keep track of all hosts and perform actions on them.'''
     host_list = []
 
     def __init__(self, hostname, username, password, mac, column=0, row=0): # ip?
@@ -19,9 +17,7 @@ class Host:
         self.session_id = self.get_session_id()
 
     def info_frame(self, host_frame):
-        '''
-        Return the frame object that gets displayed in the host_frame
-        '''
+        '''Return the frame object that gets displayed in the host_frame.'''
         f = Frame(host_frame, padx=5, pady=5, bg="lightgray")
         self.photo = PhotoImage(file="tietokone.png")
         Button(f, image=self.photo, padx=0, pady=0, bg="lightgray", bd=0, command=self.display_properties).pack()
@@ -29,9 +25,7 @@ class Host:
         return f
 
     def display_properties(self):
-        '''
-        Display hosts properties in the properties_frame
-        '''
+        '''Display hosts properties in the properties_frame.'''
         global properties_frame
         for slave in properties_frame.slaves():
             slave.destroy()
@@ -47,9 +41,7 @@ class Host:
 
     @classmethod
     def populate(cls, file_path):
-        '''
-        Create Host objects from given .csv file
-        '''
+        '''Create Host objects from given .csv file.'''
         from csv import reader
         cls.host_list = []
         with open(file_path, "r") as f:
@@ -63,9 +55,9 @@ class Host:
 
     @classmethod
     def display(cls):
-        '''
-        Display hosts inside the host_frame.
-        Hosts with either their row or column defined as 0 get displayed at the bottom on their own row
+        '''Display hosts inside the host_frame.
+
+        Hosts with either their row or column defined as 0 get displayed at the bottom on their own row.
         '''
         global host_frame
         for slave in host_frame.grid_slaves():
@@ -86,24 +78,18 @@ class Host:
 
     @classmethod
     def run(cls, command, interactive=False, **kwargs):
-        '''
-        Run a command on all selected hosts
-        '''
-        import threading
+        '''Run a command on all selected hosts (on a seperate thread to increase performance).'''
+        from threading import Thread
         for host in cls.host_list:
             if host.selected.get():
                 if interactive:
-                    #run(host.hostname, host.username, host.password, command, host.session_id, **kwargs)
-                    threading.Thread(target=run, args=(host.hostname, host.username, host.password, command, host.session_id), kwargs=kwargs).start()
+                    Thread(target=run, args=(host.hostname, host.username, host.password, command, host.session_id), kwargs=kwargs).start()
                 else:
-                    #print(run(host.hostname, host.username, host.password, command, **kwargs))
-                    threading.Thread(target=run, args=(host.hostname, host.username, host.password, command, None, True), kwargs=kwargs).start()
+                    Thread(target=run, args=(host.hostname, host.username, host.password, command, None), kwargs=kwargs).start()
 
     @classmethod
     def wake_up(cls):
-        '''
-        Wake up all selected hosts through WOL
-        '''
+        '''Wake up all selected hosts through WOL.'''
         from wakeonlan import send_magic_packet
         macs = []
         for host in cls.host_list:
@@ -111,15 +97,14 @@ class Host:
         send_magic_packet(*macs)
 
     def get_session_id(self):
+        '''Get host's active session id.'''
         stdout = run("VKY00093", "uzer", "", "powershell", arguments='-command "Get-Process powershell | Select-Object SessionId"')
         for char in stdout.split():
             if char.isdigit():
                 return int(char)
 
     def get_mac(self):
-        '''
-        Get host's mac adress
-        '''
+        '''Get host's mac adress.'''
         from csv import reader
         stdout = run(self.hostname, self.username, self.password, "getmac", arguments="/FO CSV /NH") # Get mac adress from host formatted in csv without the header row
         csv_reader = reader(stdout, delimiter=",")
@@ -136,6 +121,7 @@ class Command:
         self.name = name
 
     def clicked(self):
+        '''Method which should be called by the children of the Command class to get the basic functionality of setting up the properties frame.'''
         global properties_frame
         for slave in properties_frame.slaves():
             slave.destroy()
@@ -145,6 +131,7 @@ class Command:
 
     @classmethod
     def init_commands(cls, menubar):
+        '''Creates menu object from the menu labels specified in the "menus" class variable.'''
         for menu_label in cls.menus:
             menu = Menu(menubar, tearoff=0)
             cls.menus[cls.menus.index(menu_label)] = menu
@@ -261,12 +248,13 @@ class BootCommand(Command):
 
 
 class CopyCommand(Command):
-    def __init__(self, name, source, destination):
+    def __init__(self, name, source, destination, **kwargs):
         super().__init__(name)
         self.source = StringVar()
         self.source.set(source)
         self.destination = StringVar()
         self.destination.set(destination)
+        self.kwargs = kwargs
 
     def clicked(self):
         f = super().clicked()
@@ -278,10 +266,11 @@ class CopyCommand(Command):
 
     def run(self):
         args = self.source.get() + " " + self.destination.get()
-        Host.run("robocopy", interactive=False, arguments=args)
+        Host.run("robocopy", interactive=False, arguments=args, **self.kwargs)
 
 
-def run(host, username, password, command, session_id=None, print_std=False, **kwargs):
+def run(host, username, password, command, session_id=None, print_std=True, **kwargs):
+    '''Run a command on a specific host.'''
     from pypsexec.client import Client
     from pypsexec.exceptions import PAExecException
     from smbprotocol.exceptions import SMBAuthenticationError
@@ -314,9 +303,7 @@ def run(host, username, password, command, session_id=None, print_std=False, **k
 
 
 def main():
-    '''
-    Entry point of the program
-    '''
+    '''Entry point of the program.'''
     from os.path import normpath
     global host_frame, properties_frame
     root = Tk()
@@ -348,7 +335,7 @@ def main():
 
     UpdateCommand("Päivitä luokka...", "luokka.csv").add_to_menu(4)
     CopyCommand("Siirrä tiedostoja...", "", "").add_to_menu(4)
-    CustomCommand("Aja...", print_std=True).add_to_menu(4)
+    CustomCommand("Aja...").add_to_menu(4)
 
     Host.populate(normpath("luokka.csv")) 
     Host.display()
