@@ -1,7 +1,7 @@
 Add-Type -assembly System.Windows.Forms
 . $PSScriptRoot\hallinta.ps1
 
-[Host]::Populate("luokka.csv", " ")
+[Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $global:root = [System.Windows.Forms.Form]::new()
 $root.Text = "Luokanhallinta"
 $root.Width = 1280

@@ -19,11 +19,7 @@
     static [void] Populate([String]$path, [String]$delimiter)
     {
         [Host]::Hosts = @()
-        $rows = Import-Csv $path -Delimiter $delimiter
-        foreach($row in $rows)
-        {
-            [Host]::Hosts += [Host]::new($row.Nimi, $row.Mac, [Int]$row.Sarake, [Int]$row.Rivi)
-        }
+        Import-Csv $path -Delimiter $delimiter | ForEach-Object {[Host]::Hosts += [Host]::new($_.Nimi, $_.Mac, [Int]$_.Sarake, [Int]$_.Rivi)}
     }
 
     static [void] Display()
@@ -63,14 +59,15 @@
         }
     }
     
-    static [Bool] Run([String]$executable, [String]$argument, [String]$working_directory)
+    static [Bool] Run([String]$executable, [String]$argument, [String]$workingDirectory)
     {
         $session = [Host]::GetSession()
         if (($null -eq $session) -or ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available)){ return $false }
-        Invoke-Command -Session $session -ArgumentList $executable, $argument, $working_directory -ScriptBlock {
-            param($executable, $argument, $working_directory)
-            $action = New-ScheduledTaskAction -Execute $executable -Argument $argument -WorkingDirectory $working_directory
-            $principal = New-ScheduledTaskPrincipal -userid "vky00093\uzer"
+        Invoke-Command -Session $session -ArgumentList $executable, $argument, $workingDirectory -ScriptBlock {
+            param($executable, $argument, $workingDirectory)
+            if($argument -eq ""){ $argument = " " }
+            $action = New-ScheduledTaskAction -Execute $executable -Argument $argument -WorkingDirectory $workingDirectory
+            $principal = New-ScheduledTaskPrincipal -userid $(whoami)
             $task = New-ScheduledTask -Action $action -Principal $principal
             $taskname = "LKNHLNT"
             try 
@@ -123,17 +120,17 @@ class BaseCommand : System.Windows.Forms.ToolStripMenuItem
             [BaseCommand]::new("Sammuta", {[Host]::Run({shutdown /s}, $false)})
         )
         "VBS3" = @(
-            [InteractiveCommand]::new("Käynnistä", "VBS3_64.exe", "-window", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI")
+            [InteractiveCommand]::new("Käynnistä", "VBS3_64.exe", "", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI")
             [BaseCommand]::new("Synkkaa addonit", {Write-Host ([Host]::Run({robocopy '\\PSPR-Storage' 'C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons' /MIR /XO /R:2 /W:10}, $true))})
             [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName VBS3_64}, $false)})
         )
         "SteelBeasts" = @(
-            [BaseCommand]::new("Käynnistä", {[Host]::Run("SBPro64CM.exe", " ", "C:\Program Files\eSim Games\SB Pro FI\Release")})
+            [BaseCommand]::new("Käynnistä", {[Host]::Run("SBPro64CM.exe", "", "C:\Program Files\eSim Games\SB Pro FI\Release")})
             [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName SBPro64CM}, $false)})
         )
         "Muu" = @(
             [BaseCommand]::new("Sulje", {$global:root.Close()})
-            [InteractiveCommand]::new("Chrome", "chrome.exe", " ", "C:\Program Files (x86)\Google\Chrome\Application")
+            [InteractiveCommand]::new("Chrome", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
         )
     } 
 
@@ -147,7 +144,7 @@ class BaseCommand : System.Windows.Forms.ToolStripMenuItem
     [void] OnClick([System.EventArgs]$e)
     {
         ([System.Windows.Forms.ToolStripMenuItem]$this).OnClick($e)
-        Invoke-Command $this.Script
+        & $this.Script
     }
 
     static [void] Display()
@@ -224,6 +221,7 @@ class InteractiveCommand : PopUpCommand
             Anchor = [System.Windows.Forms.AnchorStyles]::Left
         })
     )
+    
     [Scriptblock]$ClickScript = {
         $form.Width = 410
         $form.Height = 175
