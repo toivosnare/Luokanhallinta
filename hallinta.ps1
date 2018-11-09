@@ -12,7 +12,14 @@ class Host
     Host([String]$name, [String]$mac, [Int]$column, [Int]$row)
     {
         $this.Name = $name
-        $this.Mac = $mac
+        if($mac)
+        {
+            $this.Mac = $mac
+        }
+        else
+        {
+            $this.Mac = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $this.Name | Select-Object -First 1 -ExpandProperty MACAddress
+        }
         $this.Status = Test-Connection -ComputerName $this.Name -Count 1 -Quiet
         $this.Column = $column
         $this.Row = $row
