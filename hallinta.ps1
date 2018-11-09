@@ -1,4 +1,6 @@
-﻿class Host
+﻿using namespace System.Windows.Forms
+
+class Host
 {
     static [Host[]]$Hosts = @()
     [String]$Name
@@ -26,7 +28,7 @@
     {
         foreach($h in [Host]::Hosts)
         {
-            $cell = $global:table[($h.Column - 1), ($h.Row - 1)]
+            $cell = $script:table[($h.Column - 1), ($h.Row - 1)]
             $cell.Value = $h.Name
             $cell.ToolTipText = $h.Mac
             if($h.Status)
@@ -37,9 +39,9 @@
         }
     }
 
-    hidden static [System.Management.Automation.Runspaces.PSSession] GetSession()
+    hidden static [Object[]] GetSession()
     {
-        $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($global:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
+        $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
         if($null -eq $hostnames){ return $null }
         return New-PSSession -ComputerName $hostnames
     }
@@ -58,7 +60,7 @@
             return Invoke-Command -Session $session -ScriptBlock $command
         }
     }
-    
+
     static [Bool] Run([String]$executable, [String]$argument, [String]$workingDirectory)
     {
         $session = [Host]::GetSession()
@@ -91,7 +93,7 @@
 
     static [void] Wake()
     {
-        $macs = [Host]::Hosts | Where-Object {($global:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Mac}
+        $macs = [Host]::Hosts | Where-Object {($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Mac}
         $port = 9
         $broadcast = [Net.IPAddress]::Parse("255.255.255.255")
         foreach($m in $macs)
@@ -106,18 +108,18 @@
     }
 }
 
-class BaseCommand : System.Windows.Forms.ToolStripMenuItem
+class BaseCommand : ToolStripMenuItem
 {
     [Scriptblock]$Script
     static $Commands = [ordered]@{
         "Valitse" = @(
-            [BaseCommand]::new("Kaikki", {$global:table.SelectAll()}),
-            [BaseCommand]::new("Ei mitään", {$global:table.ClearSelection()})
+            [BaseCommand]::new("Kaikki", {$script:table.SelectAll()}),
+            [BaseCommand]::new("Ei mitään", {$script:table.ClearSelection()})
         )
         "Tietokone" = @(
             [BaseCommand]::new("Käynnistä", {[Host]::Wake()})
-            [BaseCommand]::new("Käynnistä uudelleen", {[Host]::Run({shutdown /r}, $false)})
-            [BaseCommand]::new("Sammuta", {[Host]::Run({shutdown /s}, $false)})
+            [BaseCommand]::new("Käynnistä uudelleen", {[Host]::Run({shutdown /r /t 10 /c "Luokanhallinta on ajastanut uudelleen käynnistyksen"}, $false)})
+            [BaseCommand]::new("Sammuta", {[Host]::Run({shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"}, $false)})
         )
         "VBS3" = @(
             [InteractiveCommand]::new("Käynnistä", "VBS3_64.exe", "", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI")
@@ -129,8 +131,9 @@ class BaseCommand : System.Windows.Forms.ToolStripMenuItem
             [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName SBPro64CM}, $false)})
         )
         "Muu" = @(
-            [BaseCommand]::new("Sulje", {$global:root.Close()})
+            [BaseCommand]::new("Sulje", {$script:root.Close()})
             [InteractiveCommand]::new("Chrome", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
+            [BaseCommand]::new("Testi", {})
         )
     } 
 
@@ -143,7 +146,7 @@ class BaseCommand : System.Windows.Forms.ToolStripMenuItem
 
     [void] OnClick([System.EventArgs]$e)
     {
-        ([System.Windows.Forms.ToolStripMenuItem]$this).OnClick($e)
+        ([ToolStripMenuItem]$this).OnClick($e)
         & $this.Script
     }
 
@@ -151,9 +154,9 @@ class BaseCommand : System.Windows.Forms.ToolStripMenuItem
     {
         foreach($category in [BaseCommand]::Commands.keys)
         {
-            $menu = [System.Windows.Forms.ToolStripMenuItem]::new()
+            $menu = [ToolStripMenuItem]::new()
             $menu.Text = $category
-            $global:menubar.Items.Add($menu)
+            $script:menubar.Items.Add($menu)
             foreach($command in [BaseCommand]::Commands[$category])
             {
                 $menu.DropDownItems.Add($command)
@@ -177,11 +180,11 @@ class PopUpCommand : BaseCommand
 
     [void] OnClick([System.EventArgs]$e)
     {
-        ([System.Windows.Forms.ToolStripMenuItem]$this).OnClick($e)
-        $form = [System.Windows.Forms.Form]::new()
+        ([ToolStripMenuItem]$this).OnClick($e)
+        $form = [Form]::new()
         $form.Text = $this.Text
         $form.AutoSize = $true
-        $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
+        $form.FormBorderStyle = [FormBorderStyle]::FixedToolWindow
         $button = [RunButton]::new($this, $form)
         & $this.ClickScript
         $form.ShowDialog()
@@ -193,47 +196,47 @@ class PopUpCommand : BaseCommand
 class InteractiveCommand : PopUpCommand
 {
     [Object[]]$Widgets = @(
-        (New-Object System.Windows.Forms.Label -Property @{
+        (New-Object Label -Property @{
             Text = "Ohjelma:"
             AutoSize = $true
-            Anchor = [System.Windows.Forms.AnchorStyles]::Right
+            Anchor = [AnchorStyles]::Right
         }),
-        (New-Object System.Windows.Forms.TextBox -Property @{
+        (New-Object TextBox -Property @{
             Width = 300
-            Anchor = [System.Windows.Forms.AnchorStyles]::Left
+            Anchor = [AnchorStyles]::Left
         }),
-        (New-Object System.Windows.Forms.Label -Property @{
+        (New-Object Label -Property @{
             Text = "Parametri:"
             AutoSize = $true
-            Anchor = [System.Windows.Forms.AnchorStyles]::Right
+            Anchor = [AnchorStyles]::Right
         }),
-        (New-Object System.Windows.Forms.TextBox -Property @{
+        (New-Object TextBox -Property @{
             Width = 300
-            Anchor = [System.Windows.Forms.AnchorStyles]::Left
+            Anchor = [AnchorStyles]::Left
         }),
-        (New-Object System.Windows.Forms.Label -Property @{
+        (New-Object Label -Property @{
             Text = "Polku:"
             AutoSize = $true
-            Anchor = [System.Windows.Forms.AnchorStyles]::Right
+            Anchor = [AnchorStyles]::Right
         }),
-        (New-Object System.Windows.Forms.TextBox -Property @{
+        (New-Object TextBox -Property @{
             Width = 300
-            Anchor = [System.Windows.Forms.AnchorStyles]::Left
+            Anchor = [AnchorStyles]::Left
         })
     )
     
     [Scriptblock]$ClickScript = {
         $form.Width = 410
         $form.Height = 175
-        $grid = [System.Windows.Forms.TableLayoutPanel]::new()
-        $grid.CellBorderStyle = [System.Windows.Forms.TableLayoutPanelCellBorderStyle]::Inset
+        $grid = [TableLayoutPanel]::new()
+        $grid.CellBorderStyle = [TableLayoutPanelCellBorderStyle]::Inset
         $grid.Location = [System.Drawing.Point]::new(0, 0)
         $grid.AutoSize = $true
-        $grid.Padding = [System.Windows.Forms.Padding]::new(10)
+        $grid.Padding = [Padding]::new(10)
         $grid.ColumnCount = 2
         $grid.RowCount = 4
         $grid.Controls.AddRange($this.Widgets)
-        $button.Dock = [System.Windows.Forms.DockStyle]::Bottom
+        $button.Dock = [DockStyle]::Bottom
         $grid.Controls.Add($button)
         $grid.SetColumnSpan($button, 2)
         $form.Controls.Add($grid)
@@ -242,7 +245,7 @@ class InteractiveCommand : PopUpCommand
         $executable = ($this.Widgets[1]).Text
         $argument = ($this.Widgets[3]).Text
         $workingDirectory = ($this.Widgets[5]).Text
-        Write-Host ([Host]::Run($executable, $argument, $workingDirectory))
+        [Host]::Run($executable, $argument, $workingDirectory)
     }
 
     InteractiveCommand([String]$name, [String]$executable, [String]$argument, [String]$workingDirectory) : base($name, $this.Widgets, $this.ClickScript, $this.RunScript)
@@ -253,12 +256,12 @@ class InteractiveCommand : PopUpCommand
     }
 }
 
-class RunButton : System.Windows.Forms.Button
+class RunButton : Button
 {
     [BaseCommand]$Command
-    [System.Windows.Forms.Form]$Form
+    [Form]$Form
 
-    RunButton([BaseCommand]$command, [System.Windows.Forms.Form]$form)
+    RunButton([BaseCommand]$command, [Form]$form)
     {
         $this.Command = $command
         $this.Form = $form
@@ -267,8 +270,49 @@ class RunButton : System.Windows.Forms.Button
 
     [void] OnClick([System.EventArgs]$e)
     {
-        ([System.Windows.Forms.Button]$this).OnClick($e)
+        ([Button]$this).OnClick($e)
         $this.Command.Run()
         $this.Form.Close()
     }
 }
+
+[Host]::Populate("$PSScriptRoot\luokka.csv", " ")
+$script:root = [Form]::new()
+$root.Text = "Luokanhallinta"
+$root.Width = 1280
+$root.Height = 720
+
+$script:table = [DataGridView]::new()
+$table.Dock = [DockStyle]::Fill
+$table.AllowUserToAddRows = $false
+$table.AllowUserToDeleteRows = $false
+$table.AllowUserToResizeColumns = $false
+$table.AllowUserToResizeRows = $false
+$table.AllowUserToOrderColumns = $false
+$table.ReadOnly = $true
+$table.AutoSizeColumnsMode = [DataGridViewAutoSizeColumnsMode]::AllCells
+$table.ColumnHeadersHeightSizeMode = [DataGridViewColumnHeadersHeightSizeMode]::DisableResizing
+$table.AutoSizeRowsMode = [DataGridViewAutoSizeRowsMode]::AllCells
+$table.RowHeadersWidthSizeMode = [DataGridViewRowHeadersWidthSizeMode]::DisableResizing
+($table.RowsDefaultCellStyle).Padding = [Padding]::new(30)
+($table.RowsDefaultCellStyle).ForeColor = [System.Drawing.Color]::Red
+($table.RowsDefaultCellStyle).SelectionForeColor = [System.Drawing.Color]::Red
+($table.RowsDefaultCellStyle).SelectionBackColor = [System.Drawing.Color]::LightGray
+$table.SelectionMode = [DataGridViewSelectionMode]::CellSelect
+$table.ColumnCount = ([Host]::Hosts | ForEach-Object {$_.Column} | Measure-Object -Maximum).Maximum
+$table.RowCount = ([Host]::Hosts | ForEach-Object {$_.Row} | Measure-Object -Maximum).Maximum
+$table.Columns | ForEach-Object {
+    $_.HeaderText = [Char]($_.Index + 65)
+    $_.SortMode = [DataGridViewColumnSortMode]::NotSortable
+}
+$table.Rows | ForEach-Object {$_.HeaderCell.Value = [String]($_.Index + 1)}
+$root.Controls.Add($table)
+[Host]::Display()
+
+$script:menubar = [MenuStrip]::new()
+$root.MainMenuStrip = $menubar
+$menubar.Dock = [DockStyle]::Top
+$root.Controls.Add($menubar)
+[BaseCommand]::Display()
+
+$root.showDialog()
