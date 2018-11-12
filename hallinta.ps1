@@ -12,15 +12,15 @@ class Host
     Host([String]$name, [String]$mac, [Int]$column, [Int]$row)
     {
         $this.Name = $name
+        $this.Status = Test-Connection -ComputerName $this.Name -Count 1 -Quiet
         if($mac)
         {
             $this.Mac = $mac
         }
-        else
+        elseif($this.Status)
         {
             $this.Mac = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $this.Name | Select-Object -First 1 -ExpandProperty MACAddress
         }
-        $this.Status = Test-Connection -ComputerName $this.Name -Count 1 -Quiet
         $this.Column = $column
         $this.Row = $row
     }
@@ -33,6 +33,13 @@ class Host
 
     static [void] Display()
     {
+        $script:table.ColumnCount = ([Host]::Hosts | ForEach-Object {$_.Column} | Measure-Object -Maximum).Maximum
+        $script:table.RowCount = ([Host]::Hosts | ForEach-Object {$_.Row} | Measure-Object -Maximum).Maximum
+        $script:table.Columns | ForEach-Object {
+            $_.HeaderText = [Char]($_.Index + 65)
+            $_.SortMode = [DataGridViewColumnSortMode]::NotSortable
+        }
+        $script:table.Rows | ForEach-Object { $_.HeaderCell.Value = [String]($_.Index + 1) }
         foreach($h in [Host]::Hosts)
         {
             $cell = $script:table[($h.Column - 1), ($h.Row - 1)]
@@ -46,17 +53,12 @@ class Host
         }
     }
 
-    hidden static [Object[]] GetSession()
-    {
-        $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
-        if($null -eq $hostnames){ return $null }
-        return New-PSSession -ComputerName $hostnames
-    }
-
     static [String] Run([ScriptBlock]$command, [Bool]$AsJob=$false)
     {
-        $session = [Host]::GetSession()
-        if (($null -eq $session) -or ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available)){ return "Virhe" }
+        $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
+        if ($null -eq $hostnames) { return ""}
+        $session = New-PSSession -ComputerName $hostnames
+        if ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available){ return "Virhe" }
         if($AsJob)
         {
             Invoke-Command -Session $session -ScriptBlock $command -AsJob
@@ -70,14 +72,16 @@ class Host
 
     static [Bool] Run([String]$executable, [String]$argument, [String]$workingDirectory)
     {
-        $session = [Host]::GetSession()
-        if (($null -eq $session) -or ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available)){ return $false }
+        $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
+        if ($null -eq $hostnames) { return ""}
+        $session = New-PSSession -ComputerName $hostnames
+        if ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available){ return "Virhe" }
         Invoke-Command -Session $session -ArgumentList $executable, $argument, $workingDirectory -ScriptBlock {
             param($executable, $argument, $workingDirectory)
             if($argument -eq ""){ $argument = " " }
             $action = New-ScheduledTaskAction -Execute $executable -Argument $argument -WorkingDirectory $workingDirectory
-            $principal = New-ScheduledTaskPrincipal -userid $(whoami)
-            $task = New-ScheduledTask -Action $action -Principal $principal
+            #$principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Administrators" -RunLevel Highest
+            $task = New-ScheduledTask -Action $action #-Principal $principal
             $taskname = "LKNHLNT"
             try 
             {
@@ -110,7 +114,7 @@ class Host
             $packet = (,[byte]255 * 6) + ($target * 16)
             $UDPclient = [System.Net.Sockets.UdpClient]::new()
             $UDPclient.Connect($broadcast, $port)
-            [void]$UDPclient.Send($packet, 102)
+            $UDPclient.Send($packet, 102)
         }
     }
 }
@@ -140,7 +144,8 @@ class BaseCommand : ToolStripMenuItem
         "Muu" = @(
             [BaseCommand]::new("Sulje", {$script:root.Close()})
             [InteractiveCommand]::new("Chrome", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
-            [BaseCommand]::new("Testi", {})
+            [BaseCommand]::new("Aja", {Write-Host ([Host]::Run([Scriptblock]::Create((Read-Host "Komento")), $false))})
+            [PopUpCommand]::new("testi", @(), {}, {})
         )
     } 
 
@@ -306,13 +311,6 @@ $table.RowHeadersWidthSizeMode = [DataGridViewRowHeadersWidthSizeMode]::DisableR
 ($table.RowsDefaultCellStyle).SelectionForeColor = [System.Drawing.Color]::Red
 ($table.RowsDefaultCellStyle).SelectionBackColor = [System.Drawing.Color]::LightGray
 $table.SelectionMode = [DataGridViewSelectionMode]::CellSelect
-$table.ColumnCount = ([Host]::Hosts | ForEach-Object {$_.Column} | Measure-Object -Maximum).Maximum
-$table.RowCount = ([Host]::Hosts | ForEach-Object {$_.Row} | Measure-Object -Maximum).Maximum
-$table.Columns | ForEach-Object {
-    $_.HeaderText = [Char]($_.Index + 65)
-    $_.SortMode = [DataGridViewColumnSortMode]::NotSortable
-}
-$table.Rows | ForEach-Object {$_.HeaderCell.Value = [String]($_.Index + 1)}
 $root.Controls.Add($table)
 [Host]::Display()
 
@@ -322,4 +320,4 @@ $menubar.Dock = [DockStyle]::Top
 $root.Controls.Add($menubar)
 [BaseCommand]::Display()
 
-$root.showDialog()
+[void]$root.showDialog()
