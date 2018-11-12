@@ -1,4 +1,5 @@
 ﻿using namespace System.Windows.Forms
+Add-Type -AssemblyName System.Windows.Forms
 
 class Host
 {
@@ -57,7 +58,7 @@ class Host
     {
         $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
         if ($null -eq $hostnames) { return ""}
-        $session = New-PSSession -ComputerName $hostnames
+        $session = New-PSSession -ComputerName $hostnames -Credential $script:credential
         if ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available){ return "Virhe" }
         if($AsJob)
         {
@@ -74,7 +75,7 @@ class Host
     {
         $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
         if ($null -eq $hostnames) { return ""}
-        $session = New-PSSession -ComputerName $hostnames
+        $session = New-PSSession -ComputerName $hostnames -Credential $script:credential
         if ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available){ return "Virhe" }
         Invoke-Command -Session $session -ArgumentList $executable, $argument, $workingDirectory -ScriptBlock {
             param($executable, $argument, $workingDirectory)
@@ -145,7 +146,7 @@ class BaseCommand : ToolStripMenuItem
             [BaseCommand]::new("Sulje", {$script:root.Close()})
             [InteractiveCommand]::new("Chrome", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
             [BaseCommand]::new("Aja", {Write-Host ([Host]::Run([Scriptblock]::Create((Read-Host "Komento")), $false))})
-            [PopUpCommand]::new("testi", @(), {}, {})
+            [BaseCommand]::new("Vaihda käyttäjä", {$script:credential = Get-Credential -Message "Hallitse luokkaa seuraavalla käyttäjällä" -UserName $(whoami)})
         )
     } 
 
@@ -183,7 +184,7 @@ class PopUpCommand : BaseCommand
     [Scriptblock]$ClickScript
     [Scriptblock]$RunScript
 
-    PopUpCommand([String]$name, [Object[]]$widgets, [ScriptBlock]$clickScript, [Scriptblock]$runScript) : base($name)
+    PopUpCommand([String]$name, [Object[]]$widgets, [ScriptBlock]$clickScript, [Scriptblock]$runScript) : base($name + "...")
     {
         $this.Widgets = $widgets
         $this.ClickScript = $clickScript
@@ -311,6 +312,48 @@ $table.RowHeadersWidthSizeMode = [DataGridViewRowHeadersWidthSizeMode]::DisableR
 ($table.RowsDefaultCellStyle).SelectionForeColor = [System.Drawing.Color]::Red
 ($table.RowsDefaultCellStyle).SelectionBackColor = [System.Drawing.Color]::LightGray
 $table.SelectionMode = [DataGridViewSelectionMode]::CellSelect
+$table.Add_KeyDown({if($_.KeyCode -eq [Keys]::ControlKey){ $script:control = $true }})
+$table.Add_KeyUp({if($_.KeyCode -eq [Keys]::ControlKey){ $script:control = $false }})
+$table.Add_CellMouseDown({
+    if($_.RowIndex -eq -1 -and $_.ColumnIndex -ne -1)
+    {
+        if(!$script:control){ $script:table.ClearSelection()}
+        $script:startColumn = $_.ColumnIndex
+    }
+    if($_.ColumnIndex -eq -1 -and $_.RowIndex -ne -1)
+    {
+        if(!$script:control){ $script:table.ClearSelection()}
+        $script:startRow = $_.RowIndex
+    }
+})
+$table.Add_CellMouseUp({
+    if($_.RowIndex -eq -1 -and $_.ColumnIndex -ne -1)
+    {
+        $endColumn = $_.ColumnIndex
+        $min = ($script:startColumn, $endColumn | Measure-Object -Min).Minimum
+        $max = ($script:startColumn, $endColumn | Measure-Object -Max).Maximum
+        for($c = $min; $c -le $max; $c++)
+        {
+            for($r = 0; $r -lt $this.RowCount; $r++)
+            {
+                $this[[Int]$c, [Int]$r].Selected = $true
+            }
+        }
+    }
+    if($_.ColumnIndex -eq -1 -and $_.RowIndex -ne -1)
+    {
+        $endRow = $_.RowIndex
+        $min = ($script:startRow, $endRow | Measure-Object -Min).Minimum
+        $max = ($script:startRow, $endRow | Measure-Object -Max).Maximum
+        for($r = $min; $r -le $max; $r++)
+        {
+            for($c = 0; $c -lt $this.ColumnCount; $c++)
+            {
+                $this[[Int]$c, [Int]$r].Selected = $true
+            }
+        }
+    }
+})
 $root.Controls.Add($table)
 [Host]::Display()
 
@@ -320,4 +363,5 @@ $menubar.Dock = [DockStyle]::Top
 $root.Controls.Add($menubar)
 [BaseCommand]::Display()
 
+$script:credential = Get-Credential -Message "Hallitse luokkaa seuraavalla käyttäjällä" -UserName $(whoami)
 [void]$root.showDialog()
