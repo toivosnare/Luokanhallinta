@@ -320,7 +320,7 @@ $table.Add_CellMouseDown({
         if(!$script:control){ $script:table.ClearSelection()}
         $script:startColumn = $_.ColumnIndex
     }
-    if($_.ColumnIndex -eq -1 -and $_.RowIndex -ne -1)
+    elseif($_.ColumnIndex -eq -1 -and $_.RowIndex -ne -1)
     {
         if(!$script:control){ $script:table.ClearSelection()}
         $script:startRow = $_.RowIndex
@@ -340,7 +340,7 @@ $table.Add_CellMouseUp({
             }
         }
     }
-    if($_.ColumnIndex -eq -1 -and $_.RowIndex -ne -1)
+    elseif($_.ColumnIndex -eq -1 -and $_.RowIndex -ne -1)
     {
         $endRow = $_.RowIndex
         $min = ($script:startRow, $endRow | Measure-Object -Min).Minimum
@@ -352,6 +352,10 @@ $table.Add_CellMouseUp({
                 $this[[Int]$c, [Int]$r].Selected = $true
             }
         }
+    }
+    elseif($_.Button -eq [MouseButtons]::Right)
+    {
+        $this[$_.ColumnIndex, $_.RowIndex].Selected = $false
     }
 })
 $root.Controls.Add($table)
