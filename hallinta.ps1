@@ -1,5 +1,4 @@
 ﻿using namespace System.Windows.Forms
-Add-Type -AssemblyName System.Windows.Forms
 
 class Host
 {
@@ -51,13 +50,18 @@ class Host
                 $cell.Style.ForeColor = [System.Drawing.Color]::Green
                 $cell.Style.SelectionForeColor = [System.Drawing.Color]::Green
             }
+            else
+            {
+                $cell.Style.ForeColor = [System.Drawing.Color]::Red
+                $cell.Style.SelectionForeColor = [System.Drawing.Color]::Red
+            }
         }
     }
 
     static [String] Run([ScriptBlock]$command, [Bool]$AsJob=$false)
     {
         $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
-        if ($null -eq $hostnames) { return ""}
+        if ($null -eq $hostnames) { return "" }
         $session = New-PSSession -ComputerName $hostnames -Credential $script:credential
         if ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available){ return "Virhe" }
         if($AsJob)
@@ -81,8 +85,9 @@ class Host
             param($executable, $argument, $workingDirectory)
             if($argument -eq ""){ $argument = " " }
             $action = New-ScheduledTaskAction -Execute $executable -Argument $argument -WorkingDirectory $workingDirectory
-            #$principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Administrators" -RunLevel Highest
-            $task = New-ScheduledTask -Action $action #-Principal $principal
+            $user = Get-Process -Name "explorer" -IncludeUserName | Select-Object -First 1 -ExpandProperty UserName
+            $principal = New-ScheduledTaskPrincipal -UserId $user
+            $task = New-ScheduledTask -Action $action -Principal $principal
             $taskname = "LKNHLNT"
             try 
             {
@@ -111,7 +116,7 @@ class Host
         foreach($m in $macs)
         {
             $m = (($m.replace(":", "")).replace("-", "")).replace(".", "")
-            $target = 0, 2, 4, 6, 8, 10 | % {[convert]::ToByte($m.substring($_, 2), 16)}
+            $target = 0, 2, 4, 6, 8, 10 | ForEach-Object {[convert]::ToByte($m.substring($_, 2), 16)}
             $packet = (,[byte]255 * 6) + ($target * 16)
             $UDPclient = [System.Net.Sockets.UdpClient]::new()
             $UDPclient.Connect($broadcast, $port)
@@ -126,6 +131,7 @@ class BaseCommand : ToolStripMenuItem
     static $Commands = [ordered]@{
         "Valitse" = @(
             [BaseCommand]::new("Kaikki", {$script:table.SelectAll()}),
+            [BaseCommand]::new("Käänteinen", {$script:table.Rows | ForEach-Object {$_.Cells | ForEach-Object { $_.Selected = !$_.Selected }}})
             [BaseCommand]::new("Ei mitään", {$script:table.ClearSelection()})
         )
         "Tietokone" = @(
@@ -143,10 +149,10 @@ class BaseCommand : ToolStripMenuItem
             [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName SBPro64CM}, $false)})
         )
         "Muu" = @(
-            [BaseCommand]::new("Sulje", {$script:root.Close()})
+            [BaseCommand]::new("Vaihda käyttäjä", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
             [InteractiveCommand]::new("Chrome", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
             [BaseCommand]::new("Aja", {Write-Host ([Host]::Run([Scriptblock]::Create((Read-Host "Komento")), $false))})
-            [BaseCommand]::new("Vaihda käyttäjä", {$script:credential = Get-Credential -Message "Hallitse luokkaa seuraavalla käyttäjällä" -UserName $(whoami)})
+            [BaseCommand]::new("Sulje", {$script:root.Close()})
         )
     } 
 
@@ -291,7 +297,7 @@ class RunButton : Button
 
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta"
+$root.Text = "Luokanhallinta v0.0"
 $root.Width = 1280
 $root.Height = 720
 
@@ -336,7 +342,14 @@ $table.Add_CellMouseUp({
         {
             for($r = 0; $r -lt $this.RowCount; $r++)
             {
-                $this[[Int]$c, [Int]$r].Selected = $true
+                if($_.Button -eq [MouseButtons]::Left)
+                {
+                    $this[[Int]$c, [Int]$r].Selected = $true
+                }
+                elseif($_.Button -eq [MouseButtons]::Right)
+                {
+                    $this[[Int]$c, [Int]$r].Selected = $false
+                }
             }
         }
     }
@@ -349,7 +362,14 @@ $table.Add_CellMouseUp({
         {
             for($c = 0; $c -lt $this.ColumnCount; $c++)
             {
-                $this[[Int]$c, [Int]$r].Selected = $true
+                if($_.Button -eq [MouseButtons]::Left)
+                {
+                    $this[[Int]$c, [Int]$r].Selected = $true
+                }
+                elseif($_.Button -eq [MouseButtons]::Right)
+                {
+                    $this[[Int]$c, [Int]$r].Selected = $false
+                }
             }
         }
     }
@@ -367,5 +387,5 @@ $menubar.Dock = [DockStyle]::Top
 $root.Controls.Add($menubar)
 [BaseCommand]::Display()
 
-$script:credential = Get-Credential -Message "Hallitse luokkaa seuraavalla käyttäjällä" -UserName $(whoami)
+$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)
 [void]$root.showDialog()
