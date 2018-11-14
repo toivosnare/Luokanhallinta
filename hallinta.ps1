@@ -58,30 +58,29 @@ class Host
         }
     }
 
-    static [String] Run([ScriptBlock]$command, [Bool]$AsJob=$false)
+    static [void] Run([ScriptBlock]$command, [Bool]$AsJob)
     {
         $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
-        if ($null -eq $hostnames) { return "" }
+        if ($null -eq $hostnames) { return }
         $session = New-PSSession -ComputerName $hostnames -Credential $script:credential
-        if ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available){ return "Virhe" }
+        if ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available){ return }
         if($AsJob)
         {
             Invoke-Command -Session $session -ScriptBlock $command -AsJob
-            return "Job started"
         }
         else
         {
-            return Invoke-Command -Session $session -ScriptBlock $command
+            Invoke-Command -Session $session -ScriptBlock $command | Write-Host
         }
     }
 
-    static [Bool] Run([String]$executable, [String]$argument, [String]$workingDirectory)
+    static [void] Run([String]$executable, [String]$argument, [String]$workingDirectory)
     {
         $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
-        if ($null -eq $hostnames) { return ""}
+        if ($null -eq $hostnames) { return }
         $session = New-PSSession -ComputerName $hostnames -Credential $script:credential
-        if ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available){ return "Virhe" }
-        Invoke-Command -Session $session -ArgumentList $executable, $argument, $workingDirectory -ScriptBlock {
+        if ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available){ return }
+        Invoke-Command -Session $session -ArgumentList $executable, $argument, $workingDirectory -AsJob -ScriptBlock {
             param($executable, $argument, $workingDirectory)
             if($argument -eq ""){ $argument = " " }
             $action = New-ScheduledTaskAction -Execute $executable -Argument $argument -WorkingDirectory $workingDirectory
@@ -105,12 +104,11 @@ class Host
             Start-ScheduledTask -InputObject $registeredTask
             Unregister-ScheduledTask -InputObject $registeredTask -Confirm:$false
         }
-        return $true
     }
 
     static [void] Wake()
     {
-        $macs = [Host]::Hosts | Where-Object {($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Mac}
+        $macs = [Host]::Hosts | Where-Object {($script:table[($_.Column - 1), ($_.Row - 1)]).Selected -and $_} | ForEach-Object {$_.Mac}
         $port = 9
         $broadcast = [Net.IPAddress]::Parse("255.255.255.255")
         foreach($m in $macs)
@@ -136,22 +134,23 @@ class BaseCommand : ToolStripMenuItem
         )
         "Tietokone" = @(
             [BaseCommand]::new("Käynnistä", {[Host]::Wake()})
-            [BaseCommand]::new("Käynnistä uudelleen", {[Host]::Run({shutdown /r /t 10 /c "Luokanhallinta on ajastanut uudelleen käynnistyksen"}, $false)})
-            [BaseCommand]::new("Sammuta", {[Host]::Run({shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"}, $false)})
+            [BaseCommand]::new("Käynnistä uudelleen", {[Host]::Run({shutdown /r /t 10 /c "Luokanhallinta on ajastanut uudelleen käynnistyksen"}, $true)})
+            [BaseCommand]::new("Sammuta", {[Host]::Run({shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"}, $true)})
         )
         "VBS3" = @(
             [InteractiveCommand]::new("Käynnistä", "VBS3_64.exe", "", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI")
-            [BaseCommand]::new("Synkkaa addonit", {Write-Host ([Host]::Run({robocopy '\\PSPR-Storage' 'C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons' /MIR /XO /R:2 /W:10}, $true))})
-            [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName VBS3_64}, $false)})
+            [BaseCommand]::new("Synkkaa addonit", {[Host]::Run({robocopy '\\PSPR-Storage' 'C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons' /MIR /XO /R:2 /W:10}, $true)})
+            [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName VBS3_64}, $true)})
         )
         "SteelBeasts" = @(
             [BaseCommand]::new("Käynnistä", {[Host]::Run("SBPro64CM.exe", "", "C:\Program Files\eSim Games\SB Pro FI\Release")})
-            [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName SBPro64CM}, $false)})
+            [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName SBPro64CM}, $true)})
         )
         "Muu" = @(
-            [BaseCommand]::new("Vaihda käyttäjä", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
+            [BaseCommand]::new("Päivitä", {[Host]::Populate("$PSScriptRoot\luokka.csv", " "); [Host]::Display()})
+            [BaseCommand]::new("Vaihda käyttäjä...", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
             [InteractiveCommand]::new("Chrome", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
-            [BaseCommand]::new("Aja", {Write-Host ([Host]::Run([Scriptblock]::Create((Read-Host "Komento")), $false))})
+            [BaseCommand]::new("Aja...", {[Host]::Run([Scriptblock]::Create((Read-Host "Komento")), $false)})
             [BaseCommand]::new("Sulje", {$script:root.Close()})
         )
     } 
@@ -297,7 +296,7 @@ class RunButton : Button
 
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.0"
+$root.Text = "Luokanhallinta v0.1"
 $root.Width = 1280
 $root.Height = 720
 
