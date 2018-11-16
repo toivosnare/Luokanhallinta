@@ -62,15 +62,13 @@ class Host
     {
         $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
         if ($null -eq $hostnames) { return }
-        $session = New-PSSession -ComputerName $hostnames -Credential $script:credential
-        if ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available){ return }
         if($AsJob)
         {
-            Invoke-Command -Session $session -ScriptBlock $command -AsJob
+            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $command -AsJob
         }
         else
         {
-            Invoke-Command -Session $session -ScriptBlock $command | Write-Host
+            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $command | Write-Host
         }
     }
 
@@ -78,9 +76,7 @@ class Host
     {
         $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
         if ($null -eq $hostnames) { return }
-        $session = New-PSSession -ComputerName $hostnames -Credential $script:credential
-        if ($session.Availability -ne [System.Management.Automation.Runspaces.RunspaceAvailability]::Available){ return }
-        Invoke-Command -Session $session -ArgumentList $executable, $argument, $workingDirectory -AsJob -ScriptBlock {
+        Invoke-Command -ComputerName $hostnames -Credential $script:credential -ArgumentList $executable, $argument, $workingDirectory -AsJob -ScriptBlock {
             param($executable, $argument, $workingDirectory)
             if($argument -eq ""){ $argument = " " }
             $action = New-ScheduledTaskAction -Execute $executable -Argument $argument -WorkingDirectory $workingDirectory
@@ -296,7 +292,7 @@ class RunButton : Button
 
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.1"
+$root.Text = "Luokanhallinta v0.2"
 $root.Width = 1280
 $root.Height = 720
 
@@ -388,3 +384,4 @@ $root.Controls.Add($menubar)
 
 $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)
 [void]$root.showDialog()
+    
