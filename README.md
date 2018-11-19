@@ -28,7 +28,7 @@ sc.exe config "WinRM" start=auto
 Set-Item WSMan:\localhost\Client\TrustedHosts -value "10.132.0.*" # Esim.
 ```
 
-5. Luo välilyönnein erotettu "luokka.csv" tiedosto sarakkeilla "Nimi", "Mac", "Sarake", "Rivi" skriptien kanssa samaan kansioon
+5. Luo välilyönnein erotettu "luokka.csv" tiedosto sarakkeilla "Nimi", "Mac", "Sarake", "Rivi" skriptien kanssa samaan kansioon. Nimi kenttään voi laittaa myös IP-osoitteen.
 ```
 Nimi Mac Sarake Rivi
 localhost A1:B2:C3:D4:E5:F6 1 1
