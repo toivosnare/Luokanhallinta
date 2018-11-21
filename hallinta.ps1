@@ -14,24 +14,9 @@ class Host
     Host([String]$name, [String]$mac, [Int]$column, [Int]$row)
     {
         $this.Name = $name
-        Write-Host -NoNewline ("{0}: " -f $this.Name)
-        $this.Status = Test-Connection -ComputerName $this.Name -Count 1 -Quiet
-        # $this.Status = ([String](ping -n 1 -w 50 $this.Name)) -like "*Reply*"
-        # $this.Status = [Bool][System.Net.NetworkInformation.Ping]::new().SendPingAsync($this.Name, 50).Result
-        Write-Host -NoNewline ("status={0}, " -f $this.Status)
-        if($mac)
-        {
-            $this.Mac = $mac
-        }
-        elseif($this.Status)
-        {
-            $this.Mac = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $this.Name | Select-Object -First 1 -ExpandProperty MACAddress
-        }
-        Write-Host -NoNewline ("mac={0}, " -f $this.Mac)
+        $this.Mac = $mac
         $this.Column = $column
-        Write-Host -NoNewline ("column={0}, " -f $this.Column)
         $this.Row = $row
-        Write-Host ("row={0}" -f $this.Row)
     }
 
     static [void] Populate([String]$path, [String]$delimiter)
@@ -39,7 +24,25 @@ class Host
         # Creates [Host] objects from given .csv file
         Write-Host ("Populating from {0}" -f $path)
         [Host]::Hosts = @()
-        Import-Csv $path -Delimiter $delimiter | ForEach-Object {[Host]::Hosts += [Host]::new($_.Nimi, $_.Mac, [Int]$_.Sarake, [Int]$_.Rivi)}
+        Get-Job | Remove-Job
+        Import-Csv $path -Delimiter $delimiter | ForEach-Object {
+            $h = [Host]::new($_.Nimi, $_.Mac, [Int]$_.Sarake, [Int]$_.Rivi)
+            $pingJob = Test-Connection -ComputerName $h.Name -Count 1 -AsJob
+            $h | Add-Member -NotePropertyName "pingJob" -NotePropertyValue $pingJob -Force
+            [Host]::Hosts += $h
+        }
+        Get-Job | Wait-Job
+        foreach($h in [Host]::Hosts)
+        {
+            if((Receive-Job $h.pingJob).StatusCode -eq 0){ $h.Status = $true }
+            if(!$h.Mac -and $h.Status)
+            {
+                # TODO: Save mac to file
+                $h.Mac = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $h.Name | Select-Object -First 1 -ExpandProperty MACAddress
+            }
+            Write-Host ("{0}: mac={1}, status={2}, column={3}, row={4}" -f $h.Name, $h.Mac, $h.Status, $h.Column, $h.Row)
+        }
+        Get-Job | Remove-Job
     }
 
     static [void] Display()
@@ -47,7 +50,7 @@ class Host
         # Displays hosts in the $script:table
         Write-Host "Displaying"
         $cellSize = 80
-        $script:table.Rows | ForEach-Object {$_.Cells | ForEach-Object { $_.Value = ""; $_.ToolTipText = "" }}
+        $script:table.Rows | ForEach-Object {$_.Cells | ForEach-Object { $_.Value = ""; $_.ToolTipText = "" }} # Reset cells
         $script:table.ColumnCount = ([Host]::Hosts | ForEach-Object {$_.Column} | Measure-Object -Maximum).Maximum
         $script:table.RowCount = ([Host]::Hosts | ForEach-Object {$_.Row} | Measure-Object -Maximum).Maximum
         $script:table.Columns | ForEach-Object {
@@ -330,7 +333,7 @@ class RunButton : Button
 
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.4"
+$root.Text = "Luokanhallinta v0.5"
 $root.Width = 1280
 $root.Height = 720
 
