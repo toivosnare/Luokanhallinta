@@ -37,6 +37,7 @@ class Host
     static [void] Populate([String]$path, [String]$delimiter)
     {
         # Creates [Host] objects from given .csv file
+        Write-Host ("Populating from {0}" -f $path)
         [Host]::Hosts = @()
         Import-Csv $path -Delimiter $delimiter | ForEach-Object {[Host]::Hosts += [Host]::new($_.Nimi, $_.Mac, [Int]$_.Sarake, [Int]$_.Rivi)}
     }
@@ -44,6 +45,8 @@ class Host
     static [void] Display()
     {
         # Displays hosts in the $script:table
+        Write-Host "Displaying"
+        $cellSize = 80
         $script:table.Rows | ForEach-Object {$_.Cells | ForEach-Object { $_.Value = ""; $_.ToolTipText = "" }}
         $script:table.ColumnCount = ([Host]::Hosts | ForEach-Object {$_.Column} | Measure-Object -Maximum).Maximum
         $script:table.RowCount = ([Host]::Hosts | ForEach-Object {$_.Row} | Measure-Object -Maximum).Maximum
@@ -51,13 +54,14 @@ class Host
             $_.SortMode = [DataGridViewColumnSortMode]::NotSortable
             $_.HeaderText = [Char]($_.Index + 65) # Sets the column headers to A, B, C...
             $_.HeaderCell.Style.Alignment = [DataGridViewContentAlignment]::MiddleCenter
-            $_.Width = 80
+            $_.Width = $cellSize
         }
         $script:table.Rows | ForEach-Object {
             $_.HeaderCell.Value = [String]($_.Index + 1) # Sets the row headers to 1, 2, 3...
             $_.HeaderCell.Style.Alignment = [DataGridViewContentAlignment]::MiddleCenter
-            $_.Height = 80
-        }  
+            $_.Height = $cellSize
+        }
+        $script:root.MinimumSize = [System.Drawing.Size]::new(($cellSize * $script:table.ColumnCount + $script:table.RowHeadersWidth + 20), ($cellSize * $script:table.RowCount + $script:table.ColumnHeadersHeight + 65))
         foreach($h in [Host]::Hosts)
         {
             $cell = $script:table[($h.Column - 1), ($h.Row - 1)]
@@ -81,6 +85,7 @@ class Host
         # Runs a specified commands on all selected remote hosts
         $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name} # Gets the names of the hosts that are online and selected
         if ($null -eq $hostnames) { return }
+        Write-Host ("Running '{0}' on {1}" -f $command, [String]$hostnames)
         if($AsJob)
         {
             Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $command -AsJob
@@ -96,6 +101,7 @@ class Host
         # Runs a specified interactive program on all selected remote hosts by creating a scheduled task on currently logged on user then running it and finally deleting it
         $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
         if ($null -eq $hostnames) { return }
+        Write-Host ("Running {0}\{1} {2} on {3}" -f $workingDirectory, $executable, $argument, [String]$hostnames)
         Invoke-Command -ComputerName $hostnames -Credential $script:credential -ArgumentList $executable, $argument, $workingDirectory -AsJob -ScriptBlock {
             param($executable, $argument, $workingDirectory)
             if($argument -eq ""){ $argument = " " } # There must be a better way to do this xd
@@ -324,7 +330,7 @@ class RunButton : Button
 
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.3"
+$root.Text = "Luokanhallinta v0.4"
 $root.Width = 1280
 $root.Height = 720
 
