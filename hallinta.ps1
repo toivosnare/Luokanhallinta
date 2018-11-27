@@ -26,22 +26,33 @@ class Host
         [Host]::Hosts = @()
         Get-Job | Remove-Job
         Import-Csv $path -Delimiter $delimiter | ForEach-Object {
-            $h = [Host]::new($_.Nimi, $_.Mac, [Int]$_.Sarake, [Int]$_.Rivi)
+            $h = [Host]::new($_.Name, $_.Mac, [Int]$_.Column, [Int]$_.Row)
             $pingJob = Test-Connection -ComputerName $h.Name -Count 1 -AsJob
             $h | Add-Member -NotePropertyName "pingJob" -NotePropertyValue $pingJob -Force
             [Host]::Hosts += $h
         }
         Get-Job | Wait-Job
+        $needToExport = $false
         foreach($h in [Host]::Hosts)
         {
-            if((Receive-Job $h.pingJob).StatusCode -eq 0){ $h.Status = $true }
-            if(!$h.Mac -and $h.Status)
+            if((Receive-Job $h.pingJob).StatusCode -eq 0){ $h.Status = $true } # else $false
+            if(!$h.Mac)
             {
-                # TODO: Save mac to file
-                $h.Mac = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $h.Name | Select-Object -First 1 -ExpandProperty MACAddress
+                Write-Host -NoNewline -ForegroundColor Red ("Missing mac-address of {0}, " -f $h.Name)
+                if($h.Status)
+                {
+                    Write-Host -ForegroundColor Red "retrieving and saving to file"
+                    $needToExport = $true
+                    $h.Mac = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $h.Name | Select-Object -First 1 -ExpandProperty MACAddress
+                }
+                else
+                {
+                    Write-Host -ForegroundColor Red "unable to connect to offline host!"
+                }
             }
             Write-Host ("{0}: mac={1}, status={2}, column={3}, row={4}" -f $h.Name, $h.Mac, $h.Status, $h.Column, $h.Row)
         }
+        if($needToExport){ [Host]::Export($path, $delimiter) }
         Get-Job | Remove-Job
     }
 
@@ -49,7 +60,7 @@ class Host
     {
         # Displays hosts in the $script:table
         Write-Host "Displaying"
-        $cellSize = 80
+        $cellSize = 100
         $script:table.Rows | ForEach-Object {$_.Cells | ForEach-Object { $_.Value = ""; $_.ToolTipText = "" }} # Reset cells
         $script:table.ColumnCount = ([Host]::Hosts | ForEach-Object {$_.Column} | Measure-Object -Maximum).Maximum
         $script:table.RowCount = ([Host]::Hosts | ForEach-Object {$_.Row} | Measure-Object -Maximum).Maximum
@@ -65,10 +76,12 @@ class Host
             $_.Height = $cellSize
         }
         $script:root.MinimumSize = [System.Drawing.Size]::new(($cellSize * $script:table.ColumnCount + $script:table.RowHeadersWidth + 20), ($cellSize * $script:table.RowCount + $script:table.ColumnHeadersHeight + 65))
+        $script:root.Size = [System.Drawing.Size]::new(315, $script:root.MinimumSize.Height) # Hardcode XD
         foreach($h in [Host]::Hosts)
         {
             $cell = $script:table[($h.Column - 1), ($h.Row - 1)]
             $cell.Value = $h.Name
+            $cell.Style.Font = [System.Drawing.Font]::new($cell.InheritedStyle.Font.FontFamily, 14, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
             $cell.ToolTipText = $h.Mac
             if($h.Status)
             {
@@ -81,6 +94,11 @@ class Host
                 $cell.Style.SelectionForeColor = [System.Drawing.Color]::Red
             }
         }
+    }
+
+    static [void] Export([String]$path, [String]$delimiter)
+    {
+        [Host]::Hosts | Select-Object Name, Mac, Column, Row | Export-Csv $path -Delimiter $delimiter -NoTypeInformation
     }
 
     static [void] Run([ScriptBlock]$command, [Bool]$AsJob)
@@ -167,7 +185,10 @@ class BaseCommand : ToolStripMenuItem
         )
         "VBS3" = @(
             [InteractiveCommand]::new("Käynnistä", "VBS3_64.exe", "", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI")
-            [BaseCommand]::new("Synkkaa addonit", {[Host]::Run({robocopy '\\PSPR-Storage' 'C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons' /MIR /XO /R:2 /W:10}, $true)})
+            [BaseCommand]::new("Synkkaa addonit", {[Host]::Run({
+                net.exe use "\\10.130.16.2\Addons" /user:WORKGROUP\Admin kuusteista
+                Robocopy.exe "\\10.130.16.2\Addons" "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" /MIR /XO /R:0
+                }, $true)})
             [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName VBS3_64}, $true)})
         )
         "SteelBeasts" = @(
@@ -177,7 +198,7 @@ class BaseCommand : ToolStripMenuItem
         "Muu" = @(
             [BaseCommand]::new("Päivitä", {[Host]::Populate("$PSScriptRoot\luokka.csv", " "); [Host]::Display()})
             [BaseCommand]::new("Vaihda käyttäjä...", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
-            [InteractiveCommand]::new("Chrome", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
+            # [InteractiveCommand]::new("Chrome", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
             [BaseCommand]::new("Aja...", {[Host]::Run([Scriptblock]::Create((Read-Host "Komento")), $false)})
             [BaseCommand]::new("Sulje", {$script:root.Close()})
         )
@@ -333,7 +354,7 @@ class RunButton : Button
 
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.5"
+$root.Text = "Luokanhallinta v0.6"
 $root.Width = 1280
 $root.Height = 720
 
@@ -376,8 +397,8 @@ $table.Add_CellMouseUp({
     if($_.RowIndex -eq -1 -and $_.ColumnIndex -ne -1)
     {
         $endColumn = $_.ColumnIndex
-        $min = ($script:startColumn, $endColumn | Measure-Object -Min).Minimum
-        $max = ($script:startColumn, $endColumn | Measure-Object -Max).Maximum
+        $min = [Math]::Min($script:startColumn, $endColumn)
+        $max = [Math]::Max($script:startColumn, $endColumn)
         for($c = $min; $c -le $max; $c++)
         {
             for($r = 0; $r -lt $this.RowCount; $r++)
@@ -396,8 +417,8 @@ $table.Add_CellMouseUp({
     elseif($_.ColumnIndex -eq -1 -and $_.RowIndex -ne -1)
     {
         $endRow = $_.RowIndex
-        $min = ($script:startRow, $endRow | Measure-Object -Min).Minimum
-        $max = ($script:startRow, $endRow | Measure-Object -Max).Maximum
+        $min = [Math]::Min($script:startRow, $endRow)
+        $max = [Math]::Max($script:startRow, $endRow)
         for($r = $min; $r -le $max; $r++)
         {
             for($c = 0; $c -lt $this.ColumnCount; $c++)
@@ -434,4 +455,3 @@ $root.Controls.Add($menubar)
 
 $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)
 [void]$root.showDialog()
-    
