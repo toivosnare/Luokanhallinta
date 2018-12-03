@@ -1,3 +1,5 @@
+![screenshot](/uploads/654cd95f47988ac1d6febd0ac5aa856d/screenshot.png)
+
 # Luokanhallinta
 
 blablabla
