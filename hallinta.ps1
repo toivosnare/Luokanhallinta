@@ -81,7 +81,7 @@ class Host
         {
             $cell = $script:table[($h.Column - 1), ($h.Row - 1)]
             $cell.Value = $h.Name
-            $cell.Style.Font = [System.Drawing.Font]::new($cell.InheritedStyle.Font.FontFamily, 14, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+            $cell.Style.Font = [System.Drawing.Font]::new($cell.InheritedStyle.Font.FontFamily, 12, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
             $cell.ToolTipText = $h.Mac
             if($h.Status)
             {
@@ -185,10 +185,33 @@ class BaseCommand : ToolStripMenuItem
         )
         "VBS3" = @(
             [InteractiveCommand]::new("Käynnistä", "VBS3_64.exe", "", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI")
-            [BaseCommand]::new("Synkkaa addonit", {[Host]::Run({
-                net.exe use "\\10.130.16.2\Addons" /user:WORKGROUP\Admin kuusteista
-                Robocopy.exe "\\10.130.16.2\Addons" "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" /MIR /XO /R:0
-                }, $true)})
+            [BaseCommand]::new("Synkkaa addonit", {
+                [Host]::Run({
+                    $source = "\\10.130.16.2\Addons"
+                    $domain = "WORKGROUP"
+                    $user = "Admin"
+                    $password = "kuusteista"
+                    net.exe use $source /user:$domain\$user $password
+                    Robocopy.exe $source "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" /MIR /XO /R:0
+                }, $true)
+            })
+            [BaseCommand]::new("Synkkaa asetukset", {
+                if(!(Get-SmbShare -Name "VBS3" -ErrorAction SilentlyContinue))
+                {
+                    $path = "$ENV:USERPROFILE\Documents\VBS3"
+                    Write-Host -ForegroundColor Red "$path not shared, creating SMB share..."
+                    New-SmbShare -Name "VBS3" -Path $path -Description "Tarvitaan luokanhallintaohjelman asetussynkkiin"
+                }
+                [Host]::Run({
+                    $source = "\\127.0.0.1\VBS3"
+                    $domain = "VKY00093"
+                    $user = "Uzer"
+                    $password = """" # Empty password should be represented as ""
+                    net.exe use $source /user:$domain\$user $password
+                    Robocopy.exe $source "$ENV:USERPROFILE\Documents\VBS3" "$user.VBS3Profile"
+                    Rename-Item -Path "$ENV:USERPROFILE\Documents\VBS3\$user.VBS3Profile" -NewName "$ENV:USERNAME.VBS3Profile"
+                }, $true)
+            })
             [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName VBS3_64}, $true)})
         )
         "SteelBeasts" = @(
@@ -198,7 +221,6 @@ class BaseCommand : ToolStripMenuItem
         "Muu" = @(
             [BaseCommand]::new("Päivitä", {[Host]::Populate("$PSScriptRoot\luokka.csv", " "); [Host]::Display()})
             [BaseCommand]::new("Vaihda käyttäjä...", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
-            # [InteractiveCommand]::new("Chrome", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
             [BaseCommand]::new("Aja...", {[Host]::Run([Scriptblock]::Create((Read-Host "Komento")), $false)})
             [BaseCommand]::new("Sulje", {$script:root.Close()})
         )
@@ -354,9 +376,7 @@ class RunButton : Button
 
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.6"
-$root.Width = 1280
-$root.Height = 720
+$root.Text = "Luokanhallinta v0.7"
 
 $script:table = [DataGridView]::new()
 $table.Dock = [DockStyle]::Fill
