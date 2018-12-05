@@ -101,7 +101,7 @@ class Host
         [Host]::Hosts | Select-Object Name, Mac, Column, Row | Export-Csv $path -Delimiter $delimiter -NoTypeInformation
     }
 
-    static [void] Run([ScriptBlock]$command, [Bool]$AsJob)
+    static [void] Run([Bool]$AsJob, [Object[]]$Params, [ScriptBlock]$command)
     {
         # Runs a specified commands on all selected remote hosts
         $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name} # Gets the names of the hosts that are online and selected
@@ -109,11 +109,11 @@ class Host
         Write-Host ("Running '{0}' on {1}" -f $command, [String]$hostnames)
         if($AsJob)
         {
-            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $command -AsJob
+            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $command -ArgumentList $Params -AsJob
         }
         else
         {
-            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $command | Write-Host
+            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $command -ArgumentList $Params | Write-Host
         }
     }
 
@@ -180,52 +180,28 @@ class BaseCommand : ToolStripMenuItem
         )
         "Tietokone" = @(
             [BaseCommand]::new("Käynnistä", {[Host]::Wake()})
-            [BaseCommand]::new("Käynnistä uudelleen", {[Host]::Run({shutdown /r /t 10 /c "Luokanhallinta on ajastanut uudelleen käynnistyksen"}, $true)})
-            [BaseCommand]::new("Sammuta", {[Host]::Run({shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"}, $true)})
+            [BaseCommand]::new("Virus scan", {[Host]::Run("fsav.exe", "/disinf C: D: ", "C:\Program Files (x86)\F-Secure\Anti-Virus")})
+            [BaseCommand]::new("Käynnistä uudelleen", {[Host]::Run($true, @(), {shutdown /r /t 10 /c "Luokanhallinta on ajastanut uudelleen käynnistyksen"})})
+            [BaseCommand]::new("Sammuta", {[Host]::Run($true, @(), {shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"})})
         )
         "VBS3" = @(
-            [VBS3Command]::new("Käynnistä")
-            [BaseCommand]::new("Synkkaa addonit", {
-                [Host]::Run({
-                    $source = "\\10.130.16.2\Addons"
-                    $domain = "WORKGROUP"
-                    $user = "Admin"
-                    $password = "kuusteista"
-                    net.exe use $source /user:$domain\$user $password
-                    Robocopy.exe $source "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" /MIR /XO /R:0
-                }, $true)
-            })
-            [BaseCommand]::new("Synkkaa asetukset", {
-                if(!(Get-SmbShare -Name "VBS3" -ErrorAction SilentlyContinue))
-                {
-                    $path = "$ENV:USERPROFILE\Documents\VBS3"
-                    Write-Host -ForegroundColor Red "$path not shared, creating SMB share..."
-                    New-SmbShare -Name "VBS3" -Path $path -Description "Tarvitaan luokanhallintaohjelman asetussynkkiin"
-                }
-                [Host]::Run({
-                    $source = "\\127.0.0.1\VBS3"
-                    $domain = "VKY00093"
-                    $user = "Uzer"
-                    $password = """" # Empty password should be represented as ""
-                    net.exe use $source /user:$domain\$user $password
-                    Robocopy.exe $source "$ENV:USERPROFILE\Documents\VBS3" "$user.VBS3Profile"
-                    Rename-Item -Path "$ENV:USERPROFILE\Documents\VBS3\$user.VBS3Profile" -NewName "$ENV:USERNAME.VBS3Profile"
-                }, $true)
-            })
-            [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName VBS3_64}, $true)})
+            [VBS3Command]::new("Käynnistä...")
+            [CopyCommand]::new("Synkkaa addonit...", "\\10.130.16.2\Addons", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista", "/MIR")
+            [CopyCommand]::new("Synkkaa asetukset...", ("\\{0}\VBS3" -f (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.IPAddress.Length -gt 1 -and $_.IPAddress -ne "127.0.0.1"} | Select-Object -ExpandProperty IPAddress)), "$ENV:USERPROFILE\Documents\VBS3", $(whoami), "", "$ENV:USERNAME.VBS3Profile")
+            [BaseCommand]::new("Sulje", {[Host]::Run($true, @(), {Stop-Process -ProcessName VBS3_64})})
         )
         "SteelBeasts" = @(
             [BaseCommand]::new("Käynnistä", {[Host]::Run("SBPro64CM.exe", "", "C:\Program Files\eSim Games\SB Pro FI\Release")})
-            [BaseCommand]::new("Sulje", {[Host]::Run({Stop-Process -ProcessName SBPro64CM}, $true)})
+            [BaseCommand]::new("Sulje", {[Host]::Run($true, @(), {Stop-Process -ProcessName SBPro64CM})})
         )
         "Muu" = @(
             [BaseCommand]::new("Päivitä", {[Host]::Populate("$PSScriptRoot\luokka.csv", " "); [Host]::Display()})
             [BaseCommand]::new("Vaihda käyttäjä...", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
-            # [BaseCommand]::new("Aja...", {[Host]::Run([Scriptblock]::Create((Read-Host "Komento")), $false)})
-            # [InteractiveCommand]::new("Aja", "chrome.exe" ,"", "C:\Program Files (x86)\Google\Chrome\Application")
+            [BaseCommand]::new("Aja...", {[Host]::Run($false, @(), [Scriptblock]::Create((Read-Host "Komento")))})
+            [InteractiveCommand]::new("Aja...", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
             [BaseCommand]::new("Sulje", {$script:root.Close()})
         )
-    } 
+        } 
 
     BaseCommand([String]$name, [Scriptblock]$script) : base($name)
     {
@@ -261,82 +237,105 @@ class InteractiveCommand : BaseCommand
 {
     # Command with three fields for running an interactive programs on remote hosts
 
-    [Object[]]$Widgets = @(
-        (New-Object Label -Property @{
-            Text = "Ohjelma:"
-            AutoSize = $true
-            Anchor = [AnchorStyles]::Right
-        }),
-        (New-Object TextBox -Property @{
-            Width = 300
-            Anchor = [AnchorStyles]::Left
-        }),
-        (New-Object Label -Property @{
-            Text = "Parametri:"
-            AutoSize = $true
-            Anchor = [AnchorStyles]::Right
-        }),
-        (New-Object TextBox -Property @{
-            Width = 300
-            Anchor = [AnchorStyles]::Left
-        }),
-        (New-Object Label -Property @{
-            Text = "Polku:"
-            AutoSize = $true
-            Anchor = [AnchorStyles]::Right
-        }),
-        (New-Object TextBox -Property @{
-            Width = 300
-            Anchor = [AnchorStyles]::Left
-        })
-    )
+    [Form]$Form
+    [TableLayoutPanel]$Grid
+    [Label]$ProgramLabel
+    [TextBox]$ProgramTextBox
+    [Label]$ArgumentLabel
+    [TextBox]$ArgumentTextBox
+    [Label]$PathLabel
+    [TextBox]$PathTextBox
+    [Button]$RunButton
+    [Scriptblock]$ClickScript = { [Host]::Run($this.ProgramTextBox.Text, $this.ArgumentTextBox.Text, $this.PathTextBox.Text) }
 
-    InteractiveCommand([String]$name, [String]$executable, [String]$argument, [String]$workingDirectory) : base($name + "...")
+    InteractiveCommand([String]$name, [String]$program, [String]$argument, [String]$path) : base($name)
     {
-        # Sets default values for the fields
-        ($this.Widgets[1]).Text = $executable
-        ($this.Widgets[3]).Text = $argument
-        ($this.Widgets[5]).Text = $workingDirectory
+        $this.Form = [Form]::new()
+        $this.Form.Text = $this.Text
+        $this.Form.FormBorderStyle = [FormBorderStyle]::FixedToolWindow
+        $this.Form.AutoSize = $true
+
+        $this.Grid = [TableLayoutPanel]::new()
+        $this.Grid.CellBorderStyle = [TableLayoutPanelCellBorderStyle]::Inset
+        $this.Grid.AutoSize = $true
+        $this.Grid.Padding = [Padding]::new(10)
+        $this.Grid.ColumnCount = 2
+
+        $this.ProgramLabel = [Label]::new()
+        $this.ProgramLabel.Text = "Ohjelma:"
+        $this.ProgramLabel.AutoSize = $true
+        $this.ProgramLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.ProgramLabel, [TableLayoutPanelCellPosition]::new(0, 0))
+        $this.Grid.Controls.Add($this.ProgramLabel)
+        $this.ProgramTextBox = [TextBox]::new()
+        $this.ProgramTextBox.Width = 300
+        $this.ProgramTextBox.Anchor = [AnchorStyles]::Left
+        $this.ProgramTextBox.Text = $program
+        $this.Grid.SetCellPosition($this.ProgramTextBox, [TableLayoutPanelCellPosition]::new(1, 0))
+        $this.Grid.Controls.Add($this.ProgramTextBox)
+
+        $this.ArgumentLabel = [Label]::new()
+        $this.ArgumentLabel.Text = "Parametri:"
+        $this.ArgumentLabel.AutoSize = $true
+        $this.ArgumentLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.ArgumentLabel, [TableLayoutPanelCellPosition]::new(0, 1))
+        $this.Grid.Controls.Add($this.ArgumentLabel)
+        $this.ArgumentTextBox = [TextBox]::new()
+        $this.ArgumentTextBox.Width = 300
+        $this.ArgumentTextBox.Anchor = [AnchorStyles]::Left
+        $this.ArgumentTextBox.Text = $argument
+        $this.Grid.SetCellPosition($this.ArgumentTextBox, [TableLayoutPanelCellPosition]::new(1, 1))
+        $this.Grid.Controls.Add($this.ArgumentTextBox)
+
+        $this.PathLabel = [Label]::new()
+        $this.PathLabel.Text = "Polku:"
+        $this.PathLabel.AutoSize = $true
+        $this.PathLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.PathLabel, [TableLayoutPanelCellPosition]::new(0, 2))
+        $this.Grid.Controls.Add($this.PathLabel)
+        $this.PathTextBox = [TextBox]::new()
+        $this.PathTextBox.Width = 300
+        $this.PathTextBox.Anchor = [AnchorStyles]::Left
+        $this.PathTextBox.Text = $path
+        $this.Grid.SetCellPosition($this.PathTextBox, [TableLayoutPanelCellPosition]::new(1, 2))
+        $this.Grid.Controls.Add($this.PathTextBox)
+
+        $this.RunButton = [Button]::new()
+        $this.RunButton.Text = "Aja"
+        $this.RunButton.Dock = [DockStyle]::Bottom
+        $this.RunButton = $this.RunButton | Add-Member @{ProgramTextBox=$this.ProgramTextBox; ArgumentTextBox=$this.ArgumentTextBox; PathTextBox=$this.PathTextBox} -PassThru -Force
+        $this.RunButton.Add_Click($this.ClickScript)
+        $this.Grid.SetCellPosition($this.RunButton, [TableLayoutPanelCellPosition]::new(0, 3))
+        $this.Grid.SetColumnSpan($this.RunButton, 2)
+        $this.Grid.Controls.Add($this.RunButton)
+        $this.Form.Controls.Add($this.Grid)
     }
 
     [void] OnClick([System.EventArgs]$e)
     {
         ([ToolStripMenuItem]$this).OnClick($e)
-        $form = [Form]::new()
-        $form.Text = $this.Text
-        $form.FormBorderStyle = [FormBorderStyle]::FixedToolWindow
-        $form.Width = 410
-        $form.Height = 175
-
-        $grid = [TableLayoutPanel]::new()
-        $grid.CellBorderStyle = [TableLayoutPanelCellBorderStyle]::Inset
-        $grid.Location = [System.Drawing.Point]::new(0, 0)
-        $grid.AutoSize = $true
-        $grid.Padding = [Padding]::new(10)
-        $grid.ColumnCount = 2
-        $grid.RowCount = 4
-        $grid.Controls.AddRange($this.Widgets)
-
-        $button = [Button]::new()
-        $button.Text = "Aja"
-        $button.Dock = [DockStyle]::Bottom
-        $button = $button | Add-Member @{Widgets=$this.Widgets} -PassThru -Force
-        $button.Add_Click({
-            $executable = ($this.Widgets[1]).Text
-            $argument = ($this.Widgets[3]).Text
-            $workingDirectory = ($this.Widgets[5]).Text
-            [Host]::Run($executable, $argument, $workingDirectory)
-        })
-        $grid.Controls.Add($button)
-        $grid.SetColumnSpan($button, 2)
-
-        $form.Controls.Add($grid)
-        $form.ShowDialog()
+        $this.Form.ShowDialog()
     }
 }
 
 class VBS3Command : BaseCommand
 {
+    [Form]$Form
+    [TableLayoutPanel]$Grid
+    [FlowLayoutPanel]$StatePanel
+    [CheckBox]$AdminCheckBox
+    [CheckBox]$MulticastCheckBox
+    [Label]$ConfigLabel
+    [TextBox]$ConfigTextBox
+    [Label]$ConnectLabel
+    [TextBox]$ConnectTextBox
+    [Label]$CpuCountLabel
+    [TextBox]$CpuCountTextBox
+    [Label]$ExThreadsLabel
+    [TextBox]$ExThreadsTextBox
+    [Label]$MaxMemLabel
+    [TextBox]$MaxMemTextBox
+    [Button]$RunButton
     $States = [ordered]@{
         "Kokonäyttö" = ""
         "Ikkuna" = "-window"
@@ -345,136 +344,266 @@ class VBS3Command : BaseCommand
         "After Action Review" = "simulationClient=1"
         "SC + AAR" = "simulationClient=2"
     }
+    [Scriptblock]$ClickScript = {
+        $state = $this.StatePanel.Controls | Where-Object {$_.Checked} | Select-Object -ExpandProperty Text
+        $argument = $this.States[$state]
+        if($this.AdminCheckbox.Checked){ $argument = "-admin $argument" }
+        if(!$this.MulticastCheckBox.Checked){ $argument = "-multicast=0 $argument"}
+        if($this.ConfigTextBox.Text){ $argument = ("cfg={0} {1}" -f $this.ConfigTextBox.Text, $argument)}
+        if($this.ConnectTextBox.Text){ $argument = ("connect={0} {1}" -f $this.ConnectTextBox.Text, $argument)}
+        if($this.CpuCountTextBox.Text){ $argument = ("cpuCount={0} {1}" -f $this.CpuCountTextBox.Text, $argument)}
+        if($this.ExThreadsTextBox.Text){ $argument = ("exThreads={0} {1}" -f $this.ExThreadsTextBox.Text, $argument)}
+        if($this.MaxMemTextBox.Text){ $argument = ("maxMem={0} {1}" -f $this.MaxMemTextBox.Text, $argument)}
+        [Host]::Run("VBS3_64.exe", $argument, "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI")
+    }
 
-    VBS3Command([String]$name) : base($name + "..."){}
-
-    [void] OnClick([System.EventArgs]$e)
+    VBS3Command([String]$name) : base($name)
     {
-        ([ToolStripMenuItem]$this).OnClick($e)
-        $form = [Form]::new()
-        $form.AutoSize = $true
-        $form.FormBorderStyle = [FormBorderStyle]::FixedToolWindow
-        $form.Text = $this.Text
+        $this.Form = [Form]::new()
+        $this.Form.AutoSize = $true
+        $this.Form.FormBorderStyle = [FormBorderStyle]::FixedToolWindow
+        $this.Form.Text = $this.Text
 
-        $grid = [TableLayoutPanel]::new()
-        $grid.AutoSize = $true
-        $grid.ColumnCount = 2
-        $grid.Padding = [Padding]::new(10)
-        $grid.CellBorderStyle = [TableLayoutPanelCellBorderStyle]::Inset
+        $this.Grid = [TableLayoutPanel]::new()
+        $this.Grid.AutoSize = $true
+        $this.Grid.ColumnCount = 2
+        $this.Grid.Padding = [Padding]::new(10)
+        $this.Grid.CellBorderStyle = [TableLayoutPanelCellBorderStyle]::Inset
 
-        $statePanel = [FlowLayoutPanel]::new()
-        $statePanel.AutoSize = $true
-        $statePanel.FlowDirection = [FlowDirection]::TopDown
+        $this.StatePanel = [FlowLayoutPanel]::new()
+        $this.StatePanel.AutoSize = $true
+        $this.StatePanel.FlowDirection = [FlowDirection]::TopDown
         $this.States.Keys | ForEach-Object {
             $r = [RadioButton]::new()
             $r.AutoSize = $true
             $r.Margin = [Padding]::new(0)
             $r.Text = $_
             if($r.Text -eq "Kokonäyttö"){ $r.Checked = $true } 
-            $statePanel.Controls.Add($r)
+            $this.StatePanel.Controls.Add($r)
         }
-        $grid.SetCellPosition($statePanel, [TableLayoutPanelCellPosition]::new(1, 0)) 
-        $grid.Controls.Add($statePanel)
+        $this.Grid.SetCellPosition($this.StatePanel, [TableLayoutPanelCellPosition]::new(1, 0)) 
+        $this.Grid.Controls.Add($this.StatePanel)
 
-        $adminCheckBox = [CheckBox]::new()
-        $adminCheckBox.Text = "Admin"
-        $grid.SetCellPosition($adminCheckBox, [TableLayoutPanelCellPosition]::new(1, 1)) 
-        $grid.Controls.Add($adminCheckBox)
+        $this.AdminCheckBox = [CheckBox]::new()
+        $this.AdminCheckBox.Text = "Admin"
+        $this.Grid.SetCellPosition($this.AdminCheckBox, [TableLayoutPanelCellPosition]::new(1, 1)) 
+        $this.Grid.Controls.Add($this.AdminCheckBox)
 
-        $multicastCheckBox = [CheckBox]::new()
-        $multicastCheckBox.Text = "Multicast"
-        $multicastCheckBox.Checked = $true
-        $grid.SetCellPosition($multicastCheckBox, [TableLayoutPanelCellPosition]::new(1, 2)) 
-        $grid.Controls.Add($multicastCheckBox)
+        $this.MulticastCheckBox = [CheckBox]::new()
+        $this.MulticastCheckBox.Text = "Multicast"
+        $this.MulticastCheckBox.Checked = $true
+        $this.Grid.SetCellPosition($this.MulticastCheckBox, [TableLayoutPanelCellPosition]::new(1, 2)) 
+        $this.Grid.Controls.Add($this.MulticastCheckBox)
 
-        $configLabel = [Label]::new()
-        $configLabel.Text = "cfg="
-        $configLabel.AutoSize = $true
-        $configLabel.Anchor = [AnchorStyles]::Right
-        $grid.SetCellPosition($configLabel, [TableLayoutPanelCellPosition]::new(0, 3)) 
-        $grid.Controls.Add($configLabel)
+        $this.ConfigLabel = [Label]::new()
+        $this.ConfigLabel.Text = "cfg="
+        $this.ConfigLabel.AutoSize = $true
+        $this.ConfigLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.ConfigLabel, [TableLayoutPanelCellPosition]::new(0, 3)) 
+        $this.Grid.Controls.Add($this.ConfigLabel)
+        $this.ConfigTextBox = [TextBox]::new()
+        $this.ConfigTextBox.Width = 200
+        $this.Grid.SetCellPosition($this.ConfigTextBox, [TableLayoutPanelCellPosition]::new(1, 3)) 
+        $this.Grid.Controls.Add($this.ConfigTextBox)
 
-        $configTextBox = [TextBox]::new()
-        $configTextBox.Width = 200
-        $grid.SetCellPosition($configTextBox, [TableLayoutPanelCellPosition]::new(1, 3)) 
-        $grid.Controls.Add($configTextBox)
+        $this.ConnectLabel = [Label]::new()
+        $this.ConnectLabel.Text = "connect="
+        $this.ConnectLabel.AutoSize = $true
+        $this.ConnectLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.ConnectLabel, [TableLayoutPanelCellPosition]::new(0, 4)) 
+        $this.Grid.Controls.Add($this.ConnectLabel)
+        $this.ConnectTextBox = [TextBox]::new()
+        $this.ConnectTextBox.Width = 200
+        $this.Grid.SetCellPosition($this.ConnectTextBox, [TableLayoutPanelCellPosition]::new(1, 4)) 
+        $this.Grid.Controls.Add($this.ConnectTextBox)
 
-        $connectLabel = [Label]::new()
-        $connectLabel.Text = "connect="
-        $connectLabel.AutoSize = $true
-        $connectLabel.Anchor = [AnchorStyles]::Right
-        $grid.SetCellPosition($connectLabel, [TableLayoutPanelCellPosition]::new(0, 4)) 
-        $grid.Controls.Add($connectLabel)
+        $this.CpuCountLabel = [Label]::new()
+        $this.CpuCountLabel.Text = "cpuCount="
+        $this.CpuCountLabel.AutoSize = $true
+        $this.CpuCountLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.CpuCountLabel, [TableLayoutPanelCellPosition]::new(0, 5)) 
+        $this.Grid.Controls.Add($this.CpuCountLabel)
+        $this.CpuCountTextBox = [TextBox]::new()
+        $this.CpuCountTextBox.Width = 200
+        $this.Grid.SetCellPosition($this.CpuCountTextBox, [TableLayoutPanelCellPosition]::new(1, 5)) 
+        $this.Grid.Controls.Add($this.CpuCountTextBox)
 
-        $connectTextBox = [TextBox]::new()
-        $connectTextBox.Width = 200
-        $grid.SetCellPosition($connectTextBox, [TableLayoutPanelCellPosition]::new(1, 4)) 
-        $grid.Controls.Add($connectTextBox)
+        $this.ExThreadsLabel = [Label]::new()
+        $this.ExThreadsLabel.Text = "exThreads="
+        $this.ExThreadsLabel.AutoSize = $true
+        $this.ExThreadsLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.ExThreadsLabel, [TableLayoutPanelCellPosition]::new(0, 6)) 
+        $this.Grid.Controls.Add($this.ExThreadsLabel)
+        $this.ExThreadsTextBox = [TextBox]::new()
+        $this.ExThreadsTextBox.Width = 200
+        $this.Grid.SetCellPosition($this.ExThreadsTextBox, [TableLayoutPanelCellPosition]::new(1, 6)) 
+        $this.Grid.Controls.Add($this.ExThreadsTextBox)
 
-        $cpuCountLabel = [Label]::new()
-        $cpuCountLabel.Text = "cpuCount="
-        $cpuCountLabel.AutoSize = $true
-        $cpuCountLabel.Anchor = [AnchorStyles]::Right
-        $grid.SetCellPosition($cpuCountLabel, [TableLayoutPanelCellPosition]::new(0, 5)) 
-        $grid.Controls.Add($cpuCountLabel)
+        $this.MaxMemLabel = [Label]::new()
+        $this.MaxMemLabel.Text = "maxMem="
+        $this.MaxMemLabel.AutoSize = $true
+        $this.MaxMemLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.MaxMemLabel, [TableLayoutPanelCellPosition]::new(0, 7)) 
+        $this.Grid.Controls.Add($this.MaxMemLabel)
+        $this.MaxMemTextBox = [TextBox]::new()
+        $this.MaxMemTextBox.Width = 200
+        $this.Grid.SetCellPosition($this.MaxMemTextBox, [TableLayoutPanelCellPosition]::new(1, 7)) 
+        $this.Grid.Controls.Add($this.MaxMemTextBox)
 
-        $cpuCountTextBox = [TextBox]::new()
-        $cpuCountTextBox.Width = 200
-        $grid.SetCellPosition($cpuCountTextBox, [TableLayoutPanelCellPosition]::new(1, 5)) 
-        $grid.Controls.Add($cpuCountTextBox)
+        $this.RunButton = [Button]::new()
+        $this.RunButton = $this.RunButton | Add-Member @{States=$this.States; StatePanel=$this.StatePanel; AdminCheckbox=$this.AdminCheckBox; MulticastCheckBox=$this.MulticastCheckBox; ConfigTextBox=$this.ConfigTextBox; ConnectTextBox=$this.ConnectTextBox; CpuCountTextBox=$this.CpuCountTextBox; ExThreadsTextBox=$this.ExThreadsTextBox; MaxMemTextBox=$this.MaxMemTextBox} -PassThru -Force
+        $this.RunButton.Text = "Käynnistä"
+        $this.RunButton.Add_Click($this.ClickScript)
+        $this.RunButton.Dock = [DockStyle]::Bottom
+        $this.Form.AcceptButton = $this.RunButton
+        $this.Grid.SetCellPosition($this.RunButton, [TableLayoutPanelCellPosition]::new(0, 8))
+        $this.Grid.SetColumnSpan($this.RunButton, 2)
+        $this.Grid.Controls.Add($this.RunButton)
+        $this.Form.Controls.Add($this.Grid)
+    }
 
-        $exThreadsLabel = [Label]::new()
-        $exThreadsLabel.Text = "exThreads="
-        $exThreadsLabel.AutoSize = $true
-        $exThreadsLabel.Anchor = [AnchorStyles]::Right
-        $grid.SetCellPosition($exThreadsLabel, [TableLayoutPanelCellPosition]::new(0, 6)) 
-        $grid.Controls.Add($exThreadsLabel)
+    [void] OnClick([System.EventArgs]$e)
+    {
+        ([ToolStripMenuItem]$this).OnClick($e)
+        $this.Form.ShowDialog()
+    }
+}
 
-        $exThreadsTextBox = [TextBox]::new()
-        $exThreadsTextBox.Width = 200
-        $grid.SetCellPosition($exThreadsTextBox, [TableLayoutPanelCellPosition]::new(1, 6)) 
-        $grid.Controls.Add($exThreadsTextBox)
-
-        $maxMemLabel = [Label]::new()
-        $maxMemLabel.Text = "maxMem="
-        $maxMemLabel.AutoSize = $true
-        $maxMemLabel.Anchor = [AnchorStyles]::Right
-        $grid.SetCellPosition($maxMemLabel, [TableLayoutPanelCellPosition]::new(0, 7)) 
-        $grid.Controls.Add($maxMemLabel)
-
-        $maxMemTextBox = [TextBox]::new()
-        $maxMemTextBox.Width = 200
-        $grid.SetCellPosition($maxMemTextBox, [TableLayoutPanelCellPosition]::new(1, 7)) 
-        $grid.Controls.Add($maxMemTextBox)
-
-        $runButton = [Button]::new()
-        $runButton = $runButton | Add-Member @{States=$this.States; StatePanel=$statePanel; AdminCheckbox=$adminCheckBox; MulticastCheckBox=$multicastCheckBox; ConfigTextBox=$configTextBox; ConnectTextBox=$connectTextBox; CpuCountTextBox=$cpuCountTextBox; ExThreadsTextBox=$exThreadsTextBox; MaxMemTextBox=$maxMemTextBox} -PassThru -Force
-        $runButton.Text = "Käynnistä"
-        $runButton.Add_Click({
-            $state = $this.StatePanel.Controls | Where-Object {$_.Checked} | Select-Object -ExpandProperty Text
-            $argument = $this.States[$state]
-            if($this.AdminCheckbox.Checked){ $argument = "-admin $argument" }
-            if(!$this.MulticastCheckBox.Checked){ $argument = "-multicast=0 $argument"}
-            if($this.ConfigTextBox.Text){ $argument = ("cfg={0} {1}" -f $this.ConfigTextBox.Text, $argument)}
-            if($this.ConnectTextBox.Text){ $argument = ("connect={0} {1}" -f $this.ConnectTextBox.Text, $argument)}
-            if($this.CpuCountTextBox.Text){ $argument = ("cpuCount={0} {1}" -f $this.CpuCountTextBox.Text, $argument)}
-            if($this.ExThreadsTextBox.Text){ $argument = ("exThreads={0} {1}" -f $this.ExThreadsTextBox.Text, $argument)}
-            if($this.MaxMemTextBox.Text){ $argument = ("maxMem={0} {1}" -f $this.MaxMemTextBox.Text, $argument)}
-            [Host]::Run("VBS3_64.exe", $argument, "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI")
+class CopyCommand : BaseCommand
+{
+    [Form]$Form
+    [TableLayoutPanel]$Grid
+    [Label]$SourceLabel
+    [TextBox]$sourceTextBox
+    [Label]$DestinationLabel
+    [TextBox]$DestinationTextBox
+    [Label]$UsernameLabel
+    [TextBox]$UsernameTextBox
+    [Label]$PasswordLabel
+    [TextBox]$PasswordTextBox
+    [Label]$ArgumentLabel
+    [TextBox]$ArgumentTextBox
+    [Button]$RunButton
+    [ScriptBlock]$ClickScript = {
+        [Host]::Run($false, @($this.Source.Text, $this.Destination.Text, $this.Username.Text, $this.Password.Text, $this.Argument.Text), {
+            param(
+                [String]$source,
+                [String]$destination,
+                [String]$username,
+                [String]$password,
+                [String]$argument
+            )
+            # Write-Host ("{0}, {1}, {2}, {3}, {4}" -f $source, $destination, $username, $password, $argument)
+            if(!$password){ $password = """" }
+            net.exe use /delete $source
+            net.exe use $source /user:$username $password
+            Robocopy.exe "$source" "$destination" "$argument"
+            net.exe use /delete $source
         })
-        $runButton.Dock = [DockStyle]::Bottom
-        $form.AcceptButton = $runButton
-        $grid.SetCellPosition($runButton, [TableLayoutPanelCellPosition]::new(0, 8))
-        $grid.SetColumnSpan($runButton, 2)
-        $grid.Controls.Add($runButton)
-        $form.Controls.Add($grid)
-        $form.ShowDialog()
+    }
+
+    CopyCommand([String]$name, [String]$source, [String]$destination, [String]$username, [String]$password, [String]$argument) : base($name)
+    {
+        $this.Form = [Form]::new()
+        $this.Form.AutoSize = $true
+        $this.Form.FormBorderStyle = [FormBorderStyle]::FixedToolWindow
+        $this.Form.Text = $this.Text
+
+        $this.Grid = [TableLayoutPanel]::new()
+        $this.Grid.AutoSize = $true
+        $this.Grid.ColumnCount = 2
+        $this.Grid.Padding = [Padding]::new(10)
+        $this.Grid.CellBorderStyle = [TableLayoutPanelCellBorderStyle]::Inset
+
+        $this.SourceLabel = [Label]::new()
+        $this.SourceLabel.Text = "Lähde:"
+        $this.SourceLabel.AutoSize = $true
+        $this.SourceLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.SourceLabel, [TableLayoutPanelCellPosition]::new(0, 0)) 
+        $this.Grid.Controls.Add($this.SourceLabel)
+        $this.SourceTextBox = [TextBox]::new()
+        $this.SourceTextBox.Width = 200
+        $this.SourceTextBox.Text = $source
+        $this.Grid.SetCellPosition($this.SourceTextBox, [TableLayoutPanelCellPosition]::new(1, 0)) 
+        $this.Grid.Controls.Add($this.SourceTextBox)
+
+        $this.DestinationLabel = [Label]::new()
+        $this.DestinationLabel.Text = "Kohde:"
+        $this.DestinationLabel.AutoSize = $true
+        $this.DestinationLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.DestinationLabel, [TableLayoutPanelCellPosition]::new(0, 1)) 
+        $this.Grid.Controls.Add($this.DestinationLabel)
+        $this.DestinationTextBox = [TextBox]::new()
+        $this.DestinationTextBox.Width = 200
+        $this.DestinationTextBox.Text = $destination
+        $this.Grid.SetCellPosition($this.DestinationTextBox, [TableLayoutPanelCellPosition]::new(1, 1)) 
+        $this.Grid.Controls.Add($this.DestinationTextBox)
+
+        $this.UsernameLabel = [Label]::new()
+        $this.UsernameLabel.Text = "Käyttäjänimi:"
+        $this.UsernameLabel.AutoSize = $true
+        $this.UsernameLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.UsernameLabel, [TableLayoutPanelCellPosition]::new(0, 2)) 
+        $this.Grid.Controls.Add($this.UsernameLabel)
+        $this.UsernameTextBox = [TextBox]::new()
+        $this.UsernameTextBox.Width = 200
+        $this.UsernameTextBox.Text = $username
+        $this.Grid.SetCellPosition($this.UsernameTextBox, [TableLayoutPanelCellPosition]::new(1, 2)) 
+        $this.Grid.Controls.Add($this.UsernameTextBox)
+
+        $this.PasswordLabel = [Label]::new()
+        $this.PasswordLabel.Text = "Salasana:"
+        $this.PasswordLabel.AutoSize = $true
+        $this.PasswordLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.PasswordLabel, [TableLayoutPanelCellPosition]::new(0, 3)) 
+        $this.Grid.Controls.Add($this.PasswordLabel)
+        $this.PasswordTextBox = [TextBox]::new()
+        $this.PasswordTextBox.Width = 200
+        $this.PasswordTextBox.Text = $password
+        $this.PasswordTextBox.PasswordChar = "*"
+        $this.Grid.SetCellPosition($this.PasswordTextBox, [TableLayoutPanelCellPosition]::new(1, 3)) 
+        $this.Grid.Controls.Add($this.PasswordTextBox)
+
+        $this.ArgumentLabel = [Label]::new()
+        $this.ArgumentLabel.Text = "Parametri:"
+        $this.ArgumentLabel.AutoSize = $true
+        $this.ArgumentLabel.Anchor = [AnchorStyles]::Right
+        $this.Grid.SetCellPosition($this.ArgumentLabel, [TableLayoutPanelCellPosition]::new(0, 4)) 
+        $this.Grid.Controls.Add($this.ArgumentLabel)
+        $this.ArgumentTextBox = [TextBox]::new()
+        $this.ArgumentTextBox.Width = 200
+        $this.ArgumentTextBox.Text = $argument
+        $this.Grid.SetCellPosition($this.ArgumentTextBox, [TableLayoutPanelCellPosition]::new(1, 4)) 
+        $this.Grid.Controls.Add($this.ArgumentTextBox)
+
+        $this.RunButton = [Button]::new()
+        $this.RunButton.Text = "Kopioi"
+        $this.RunButton = $this.RunButton | Add-Member @{Source=$this.SourceTextBox; Destination=$this.DestinationTextBox; Username=$this.UsernameTextBox; Password=$this.PasswordTextBox; Argument=$this.ArgumentTextBox} -PassThru -Force
+        $this.RunButton.Add_Click($this.ClickScript)
+        $this.RunButton.Dock = [DockStyle]::Bottom
+        $this.Grid.SetCellPosition($this.RunButton, [TableLayoutPanelCellPosition]::new(0, 5))
+        $this.Grid.SetColumnSpan($this.RunButton, 2)
+        $this.Form.AcceptButton = $this.RunButton
+        $this.Grid.Controls.Add($this.RunButton)
+        $this.Form.Controls.Add($this.Grid)
+    }
+
+    [void] OnClick([System.EventArgs]$e)
+    {
+        ([ToolStripMenuItem]$this).OnClick($e)
+        $this.Form.ShowDialog()
     }
 }
 
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
+if(!(Get-SmbShare -Name "VBS3" -ErrorAction SilentlyContinue))
+{
+    $path = "$ENV:USERPROFILE\Documents\VBS3"
+    Write-Host -ForegroundColor Red "$path not shared, creating SMB share..."
+    New-SmbShare -Name "VBS3" -Path $path -Description "Tarvitaan luokanhallintaohjelman asetussynkkiin"
+}
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.8"
+$root.Text = "Luokanhallinta v0.9"
 
 $script:table = [DataGridView]::new()
 $table.Dock = [DockStyle]::Fill
