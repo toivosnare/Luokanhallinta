@@ -186,8 +186,10 @@ class BaseCommand : ToolStripMenuItem
         )
         "VBS3" = @(
             [VBS3Command]::new("Käynnistä...")
-            [CopyCommand]::new("Synkkaa addonit...", "\\10.130.16.2\Addons", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista", "/MIR")
-            [CopyCommand]::new("Synkkaa asetukset...", ("\\{0}\VBS3" -f (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.IPAddress.Length -gt 1 -and $_.IPAddress -ne "127.0.0.1"} | Select-Object -ExpandProperty IPAddress)), "$ENV:USERPROFILE\Documents\VBS3", $(whoami), "", "$ENV:USERNAME.VBS3Profile")
+            #[CopyCommand]::new("Synkkaa addonit...", "\\10.130.16.2\Addons", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista", "/MIR")
+            #[CopyCommand]::new("Synkkaa asetukset...", ("\\{0}\VBS3" -f (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.IPAddress.Length -gt 1 -and $_.IPAddress -ne "127.0.0.1"} | Select-Object -ExpandProperty IPAddress)), "$ENV:USERPROFILE\Documents\VBS3", $(whoami), "", "$ENV:USERNAME.VBS3Profile")
+            [NewCopyCommand]::new("Synkkaa addonit", "\\10.130.16.2\addons", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista")
+            [NewCopyCommand]::new("Synkkaa asetukset", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "", "")
             [BaseCommand]::new("Sulje", {[Host]::Run($true, @(), {Stop-Process -ProcessName VBS3_64})})
         )
         "SteelBeasts" = @(
@@ -201,7 +203,7 @@ class BaseCommand : ToolStripMenuItem
             [InteractiveCommand]::new("Aja...", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
             [BaseCommand]::new("Sulje", {$script:root.Close()})
         )
-        } 
+    } 
 
     BaseCommand([String]$name, [Scriptblock]$script) : base($name)
     {
@@ -495,7 +497,6 @@ class CopyCommand : BaseCommand
             )
             # Write-Host ("{0}, {1}, {2}, {3}, {4}" -f $source, $destination, $username, $password, $argument)
             if(!$password){ $password = """" }
-            net.exe use /delete $source
             net.exe use $source /user:$username $password
             Robocopy.exe "$source" "$destination" "$argument"
             net.exe use /delete $source
@@ -595,15 +596,90 @@ class CopyCommand : BaseCommand
     }
 }
 
-[Host]::Populate("$PSScriptRoot\luokka.csv", " ")
-if(!(Get-SmbShare -Name "VBS3" -ErrorAction SilentlyContinue))
+class NewCopyCommand : BaseCommand
 {
-    $path = "$ENV:USERPROFILE\Documents\VBS3"
-    Write-Host -ForegroundColor Red "$path not shared, creating SMB share..."
-    New-SmbShare -Name "VBS3" -Path $path -Description "Tarvitaan luokanhallintaohjelman asetussynkkiin"
+    [String]$Source
+    [String]$Destination
+    [String]$Username
+    [String]$Password
+
+    NewCopyCommand([String]$name, [String]$source, [String]$destination, [String]$username, [String]$password) : base($name)
+    {
+        $this.Source = $source
+        $this.Destination = $destination
+        $this.Username = $username
+        $this.Password = $password
+    }
+
+    [void] OnClick([System.EventArgs]$e)
+    {
+        ([ToolStripMenuItem]$this).OnClick($e)
+        Write-Host ("Mirroring {0} to {1}" -f $this.Source, $this.Destination)
+        if($this.Username)
+        {
+            $u = $this.Username
+            $p = $this.Password
+            net.exe use $this.Source /user:$u $p
+        }
+        [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {
+            Write-Host -ForegroundColor Magenta $_.Name
+            $session = New-PSSession -ComputerName $_.Name
+            Get-ChildItem $this.Source | ForEach-Object {
+                $sourcePath = $_.FullName
+                $destinationPath = $sourcePath.Replace($this.Source, $this.Destination)
+
+                Write-Host -NoNewline ("{0}: " -f $_)
+                if(Test-Path $destinationPath)
+                {
+                    $sourceFile = Get-Item $sourcePath
+                    $destinationFile = Invoke-Command -Session $session -ArgumentList $destinationPath -ScriptBlock {
+                        param([String]$destinationPath)
+                        $destinationFile = Get-Item $destinationPath
+                        return $destinationFile
+                    }
+                    if($sourceFile.LastWriteTime -gt $destinationFile.LastWriteTime)
+                    {
+                        Write-Host -ForegroundColor Yellow "newer version, copying"
+                        Copy-Item $sourcePath -Destination $destinationPath -ToSession $session -Force
+                    }
+                    else
+                    {
+                        Write-Host -ForegroundColor Green "already in place, skipping"  
+                    }
+                }
+                else
+                {
+                    Write-Host -ForegroundColor Yellow "not found, copying"
+                    Copy-Item $sourcePath -Destination $destinationPath -ToSession $session
+                }
+            }
+            Get-ChildItem $destination | ForEach-Object {
+                $destinationPath = $_.FullName
+                $sourcePath = $destinationPath.Replace($this.Destination, $this.Source)
+                if((Test-Path $sourcePath) -eq $false)
+                {
+                    Write-Host -ForegroundColor Red ("{0} not in {1}, removing" -f $_, $this.Source)
+                    Remove-Item $destinationPath
+                }
+            }
+        }
+        if($this.Username)
+        {
+            net.exe use /delete $this.Source
+        }
+        Write-Host "Done"
+    }
 }
+
+[Host]::Populate("$PSScriptRoot\luokka.csv", " ")
+# if(!(Get-SmbShare -Name "VBS3" -ErrorAction SilentlyContinue))
+# {
+#     $path = "$ENV:USERPROFILE\Documents\VBS3"
+#     Write-Host -ForegroundColor Red "$path not shared, creating SMB share..."
+#     New-SmbShare -Name "VBS3" -Path $path -Description "Tarvitaan luokanhallintaohjelman asetussynkkiin"
+# }
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.9"
+$root.Text = "Luokanhallinta v0.10"
 
 $script:table = [DataGridView]::new()
 $table.Dock = [DockStyle]::Fill
