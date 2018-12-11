@@ -49,7 +49,17 @@ class Host
                     Write-Host -ForegroundColor Red "unable to connect to offline host!"
                 }
             }
-            Write-Host ("{0}: mac={1}, status={2}, column={3}, row={4}" -f $h.Name, $h.Mac, $h.Status, $h.Column, $h.Row)
+            Write-Host -NoNewline ("{0}: mac={1}, status=" -f $h.Name, $h.Mac)
+            if($h.Status)
+            {
+                $color = "Green"
+            }
+            else
+            {
+                $color = "Red"
+            }
+            Write-Host -NoNewline -ForegroundColor $color $h.Status
+            Write-Host (", column={0}, row={1}" -f $h.Column, $h.Row)
             $h.pingJob | Remove-Job
         }
         if($needToExport){ [Host]::Export($path, $delimiter) }
@@ -105,30 +115,79 @@ class Host
         # Returns the names of the hosts that are online and selected
         return ([Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name})
     }
+}
 
-    static [void] Run([Bool]$AsJob, [Object[]]$Params, [ScriptBlock]$command)
+class LocalCommand : ToolStripMenuItem
+{
+    [Scriptblock]$Script
+
+    LocalCommand([String]$name, [Scriptblock]$script) : base($name)
     {
-        # Runs a specified commands on all selected remote hosts
+        $this.Script = $script
+    }
+
+    LocalCommand([String]$name) : base($name){}
+
+    [void] OnClick([System.EventArgs]$e)
+    {
+        ([ToolStripMenuItem]$this).OnClick($e)
+        $this.Run()
+    }
+
+    [void] Run()
+    {
+        & $this.Script
+    }
+}
+
+class RemoteCommand : LocalCommand
+{
+    [Bool]$AsJob
+    [Object[]]$Params
+    [ScriptBlock]$Command
+
+    RemoteCommand([String]$name, [Bool]$asJob, [Object[]]$params, [ScriptBlock]$command) : base($name)
+    {
+        $this.AsJob = $asJob
+        $this.Params = $params
+        $this.Command = $command
+    }
+
+    [void] Run()
+    {
         $hostnames = [Host]::GetActive() 
         if ($null -eq $hostnames) { return }
-        Write-Host ("Running '{0}' on {1}" -f $command, [String]$hostnames)
-        if($AsJob)
+        Write-Host ("Running '{0}' on {1}" -f $this.Command, [String]$hostnames)
+        if($this.AsJob)
         {
-            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $command -ArgumentList $Params -AsJob
+            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $this.Command -ArgumentList $this.Params -AsJob
         }
         else
         {
-            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $command -ArgumentList $Params | Write-Host
+            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $this.Command -ArgumentList $this.Params | Write-Host
         }
     }
+}
 
-    static [void] Run([String]$executable, [String]$argument, [String]$workingDirectory)
+class InteractiveCommand : LocalCommand
+{
+    [String]$Executable
+    [String]$Argument
+    [String]$WorkingDirectory
+
+    InteractiveCommand([String]$name, [String]$executable, [String]$argument, [String]$workingDirectory) : base($name)
     {
-        # Runs a specified interactive program on all selected remote hosts by creating a scheduled task on currently logged on user then running it and finally deleting it
+        $this.Executable = $executable
+        $this.Argument = $argument
+        $this.WorkingDirectory = $workingDirectory
+    }
+
+    [void] Run()
+    {
         $hostnames = [Host]::GetActive()
         if ($null -eq $hostnames) { return }
-        Write-Host ("Running {0}\{1} {2} on {3}" -f $workingDirectory, $executable, $argument, [String]$hostnames)
-        Invoke-Command -ComputerName $hostnames -Credential $script:credential -ArgumentList $executable, $argument, $workingDirectory -AsJob -ScriptBlock {
+        Write-Host ("Running {0}\{1} {2} on {3}" -f $this.WorkingDirectory, $this.Executable, $this.Argument, [String]$hostnames)
+        Invoke-Command -ComputerName $hostnames -Credential $script:credential -ArgumentList $this.Executable, $this.Argument, $this.WorkingDirectory -AsJob -ScriptBlock {
             param($executable, $argument, $workingDirectory)
             if($argument -eq ""){ $argument = " " } # There must be a better way to do this xd
             $action = New-ScheduledTaskAction -Execute $executable -Argument $argument -WorkingDirectory $workingDirectory
@@ -153,177 +212,9 @@ class Host
             Unregister-ScheduledTask -InputObject $registeredTask -Confirm:$false
         }
     }
-
-    static [void] Wake()
-    {
-        # Boots selected remote hosts by broadcasting the magic packet (Wake-On-LAN)
-        $macs = [Host]::Hosts | Where-Object {($script:table[($_.Column - 1), ($_.Row - 1)]).Selected -and $_} | ForEach-Object {$_.Mac} # Get mac addresses of selected hosts
-        $port = 9
-        $broadcast = [Net.IPAddress]::Parse("255.255.255.255")
-        foreach($m in $macs)
-        {
-            $m = (($m.replace(":", "")).replace("-", "")).replace(".", "")
-            $target = 0, 2, 4, 6, 8, 10 | ForEach-Object {[convert]::ToByte($m.substring($_, 2), 16)}
-            $packet = (,[byte]255 * 6) + ($target * 16) # Creates the magic packet
-            $UDPclient = [System.Net.Sockets.UdpClient]::new()
-            $UDPclient.Connect($broadcast, $port)
-            $UDPclient.Send($packet, 102) # Sends the magic packet
-        }
-    }
 }
 
-class BaseCommand : ToolStripMenuItem
-{
-    # Defines base functionality for a command. Also contains some static members which handle command initialization.
-
-    [Scriptblock]$Script
-    static $Commands = [ordered]@{
-        "Valitse" = @(
-            [BaseCommand]::new("Kaikki", {$script:table.SelectAll()}),
-            [BaseCommand]::new("Käänteinen", {$script:table.Rows | ForEach-Object {$_.Cells | ForEach-Object { $_.Selected = !$_.Selected }}})
-            [BaseCommand]::new("Ei mitään", {$script:table.ClearSelection()})
-        )
-        "Tietokone" = @(
-            [BaseCommand]::new("Käynnistä", {[Host]::Wake()})
-            [BaseCommand]::new("Virus scan", {[Host]::Run("fsav.exe", "/disinf C: D: ", "C:\Program Files (x86)\F-Secure\Anti-Virus")})
-            [BaseCommand]::new("Käynnistä uudelleen", {[Host]::Run($true, @(), {shutdown /r /t 10 /c "Luokanhallinta on ajastanut uudelleen käynnistyksen"})})
-            [BaseCommand]::new("Sammuta", {[Host]::Run($true, @(), {shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"})})
-        )
-        "VBS3" = @(
-            [VBS3Command]::new("Käynnistä...")
-            [CopyCommand]::new("Synkkaa addonit", "\\10.130.16.2\addons", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista")
-            [CopyCommand]::new("Synkkaa asetukset", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "", "")
-            [BaseCommand]::new("Sulje", {[Host]::Run($true, @(), {Stop-Process -ProcessName VBS3_64})})
-        )
-        "SteelBeasts" = @(
-            [BaseCommand]::new("Käynnistä", {[Host]::Run("SBPro64CM.exe", "", "C:\Program Files\eSim Games\SB Pro FI\Release")})
-            [BaseCommand]::new("Sulje", {[Host]::Run($true, @(), {Stop-Process -ProcessName SBPro64CM})})
-        )
-        "Muu" = @(
-            [BaseCommand]::new("Päivitä", {[Host]::Populate("$PSScriptRoot\luokka.csv", " "); [Host]::Display()})
-            [BaseCommand]::new("Vaihda käyttäjä...", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
-            [BaseCommand]::new("Aja...", {[Host]::Run($false, @(), [Scriptblock]::Create((Read-Host "Komento")))})
-            [InteractiveCommand]::new("Aja...", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
-            [BaseCommand]::new("Sulje", {$script:root.Close()})
-        )
-    } 
-
-    BaseCommand([String]$name, [Scriptblock]$script) : base($name)
-    {
-        $this.Script = $script
-    }
-
-    BaseCommand([String]$name) : base($name){}
-
-    [void] OnClick([System.EventArgs]$e)
-    {
-        ([ToolStripMenuItem]$this).OnClick($e)
-        & $this.Script
-    }
-
-    static [void] Display()
-    {
-        foreach($category in [BaseCommand]::Commands.keys) # Iterates over command categories
-        {
-            # Create a menu for each category
-            $menu = [ToolStripMenuItem]::new()
-            $menu.Text = $category
-            $script:menubar.Items.Add($menu)
-            foreach($command in [BaseCommand]::Commands[$category]) # Iterates over commands in each category
-            {
-                # Add command to menu
-                $menu.DropDownItems.Add($command)
-            }
-        }
-    }
-}
-
-class InteractiveCommand : BaseCommand
-{
-    # Command with three fields for running an interactive programs on remote hosts
-
-    [Form]$Form
-    [TableLayoutPanel]$Grid
-    [Label]$ProgramLabel
-    [TextBox]$ProgramTextBox
-    [Label]$ArgumentLabel
-    [TextBox]$ArgumentTextBox
-    [Label]$PathLabel
-    [TextBox]$PathTextBox
-    [Button]$RunButton
-    [Scriptblock]$ClickScript = { [Host]::Run($this.ProgramTextBox.Text, $this.ArgumentTextBox.Text, $this.PathTextBox.Text) }
-
-    InteractiveCommand([String]$name, [String]$program, [String]$argument, [String]$path) : base($name)
-    {
-        $this.Form = [Form]::new()
-        $this.Form.Text = $this.Text
-        $this.Form.FormBorderStyle = [FormBorderStyle]::FixedToolWindow
-        $this.Form.AutoSize = $true
-
-        $this.Grid = [TableLayoutPanel]::new()
-        $this.Grid.CellBorderStyle = [TableLayoutPanelCellBorderStyle]::Inset
-        $this.Grid.AutoSize = $true
-        $this.Grid.Padding = [Padding]::new(10)
-        $this.Grid.ColumnCount = 2
-
-        $this.ProgramLabel = [Label]::new()
-        $this.ProgramLabel.Text = "Ohjelma:"
-        $this.ProgramLabel.AutoSize = $true
-        $this.ProgramLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.ProgramLabel, [TableLayoutPanelCellPosition]::new(0, 0))
-        $this.Grid.Controls.Add($this.ProgramLabel)
-        $this.ProgramTextBox = [TextBox]::new()
-        $this.ProgramTextBox.Width = 300
-        $this.ProgramTextBox.Anchor = [AnchorStyles]::Left
-        $this.ProgramTextBox.Text = $program
-        $this.Grid.SetCellPosition($this.ProgramTextBox, [TableLayoutPanelCellPosition]::new(1, 0))
-        $this.Grid.Controls.Add($this.ProgramTextBox)
-
-        $this.ArgumentLabel = [Label]::new()
-        $this.ArgumentLabel.Text = "Parametri:"
-        $this.ArgumentLabel.AutoSize = $true
-        $this.ArgumentLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.ArgumentLabel, [TableLayoutPanelCellPosition]::new(0, 1))
-        $this.Grid.Controls.Add($this.ArgumentLabel)
-        $this.ArgumentTextBox = [TextBox]::new()
-        $this.ArgumentTextBox.Width = 300
-        $this.ArgumentTextBox.Anchor = [AnchorStyles]::Left
-        $this.ArgumentTextBox.Text = $argument
-        $this.Grid.SetCellPosition($this.ArgumentTextBox, [TableLayoutPanelCellPosition]::new(1, 1))
-        $this.Grid.Controls.Add($this.ArgumentTextBox)
-
-        $this.PathLabel = [Label]::new()
-        $this.PathLabel.Text = "Polku:"
-        $this.PathLabel.AutoSize = $true
-        $this.PathLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.PathLabel, [TableLayoutPanelCellPosition]::new(0, 2))
-        $this.Grid.Controls.Add($this.PathLabel)
-        $this.PathTextBox = [TextBox]::new()
-        $this.PathTextBox.Width = 300
-        $this.PathTextBox.Anchor = [AnchorStyles]::Left
-        $this.PathTextBox.Text = $path
-        $this.Grid.SetCellPosition($this.PathTextBox, [TableLayoutPanelCellPosition]::new(1, 2))
-        $this.Grid.Controls.Add($this.PathTextBox)
-
-        $this.RunButton = [Button]::new()
-        $this.RunButton.Text = "Aja"
-        $this.RunButton.Dock = [DockStyle]::Bottom
-        $this.RunButton = $this.RunButton | Add-Member @{ProgramTextBox=$this.ProgramTextBox; ArgumentTextBox=$this.ArgumentTextBox; PathTextBox=$this.PathTextBox} -PassThru -Force
-        $this.RunButton.Add_Click($this.ClickScript)
-        $this.Grid.SetCellPosition($this.RunButton, [TableLayoutPanelCellPosition]::new(0, 3))
-        $this.Grid.SetColumnSpan($this.RunButton, 2)
-        $this.Grid.Controls.Add($this.RunButton)
-        $this.Form.Controls.Add($this.Grid)
-    }
-
-    [void] OnClick([System.EventArgs]$e)
-    {
-        ([ToolStripMenuItem]$this).OnClick($e)
-        $this.Form.ShowDialog()
-    }
-}
-
-class VBS3Command : BaseCommand
+class VBS3Command : InteractiveCommand
 {
     [Form]$Form
     [TableLayoutPanel]$Grid
@@ -349,20 +240,8 @@ class VBS3Command : BaseCommand
         "After Action Review" = "simulationClient=1"
         "SC + AAR" = "simulationClient=2"
     }
-    [Scriptblock]$ClickScript = {
-        $state = $this.StatePanel.Controls | Where-Object {$_.Checked} | Select-Object -ExpandProperty Text
-        $argument = $this.States[$state]
-        if($this.AdminCheckbox.Checked){ $argument = "-admin $argument" }
-        if(!$this.MulticastCheckBox.Checked){ $argument = "-multicast=0 $argument"}
-        if($this.ConfigTextBox.Text){ $argument = ("cfg={0} {1}" -f $this.ConfigTextBox.Text, $argument)}
-        if($this.ConnectTextBox.Text){ $argument = ("connect={0} {1}" -f $this.ConnectTextBox.Text, $argument)}
-        if($this.CpuCountTextBox.Text){ $argument = ("cpuCount={0} {1}" -f $this.CpuCountTextBox.Text, $argument)}
-        if($this.ExThreadsTextBox.Text){ $argument = ("exThreads={0} {1}" -f $this.ExThreadsTextBox.Text, $argument)}
-        if($this.MaxMemTextBox.Text){ $argument = ("maxMem={0} {1}" -f $this.MaxMemTextBox.Text, $argument)}
-        [Host]::Run("VBS3_64.exe", $argument, "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI")
-    }
 
-    VBS3Command([String]$name) : base($name)
+    VBS3Command([String]$name) : base($name, "VBS3_64.exe", "", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI")
     {
         $this.Form = [Form]::new()
         $this.Form.AutoSize = $true
@@ -456,9 +335,9 @@ class VBS3Command : BaseCommand
         $this.Grid.Controls.Add($this.MaxMemTextBox)
 
         $this.RunButton = [Button]::new()
-        $this.RunButton = $this.RunButton | Add-Member @{States=$this.States; StatePanel=$this.StatePanel; AdminCheckbox=$this.AdminCheckBox; MulticastCheckBox=$this.MulticastCheckBox; ConfigTextBox=$this.ConfigTextBox; ConnectTextBox=$this.ConnectTextBox; CpuCountTextBox=$this.CpuCountTextBox; ExThreadsTextBox=$this.ExThreadsTextBox; MaxMemTextBox=$this.MaxMemTextBox} -PassThru -Force
+        $this.RunButton | Add-Member @{Command=$this} -PassThru -Force
         $this.RunButton.Text = "Käynnistä"
-        $this.RunButton.Add_Click($this.ClickScript)
+        $this.RunButton.Add_Click({$this.Command.Run()})
         $this.RunButton.Dock = [DockStyle]::Bottom
         $this.Form.AcceptButton = $this.RunButton
         $this.Grid.SetCellPosition($this.RunButton, [TableLayoutPanelCellPosition]::new(0, 8))
@@ -472,9 +351,24 @@ class VBS3Command : BaseCommand
         ([ToolStripMenuItem]$this).OnClick($e)
         $this.Form.ShowDialog()
     }
+
+    [void] Run()
+    {
+        $state = $this.StatePanel.Controls | Where-Object {$_.Checked} | Select-Object -ExpandProperty Text
+        $this.Argument = $this.States[$state]
+        if($this.AdminCheckbox.Checked){ $this.Argument = ("-admin {0}" -f $this.Argument)}
+        if(!$this.MulticastCheckBox.Checked){ $this.Argument = ("-multicast=0 {0}" -f $this.Argument)}
+        if($this.ConfigTextBox.Text){ $this.Argument = ("cfg={0} {1}" -f $this.ConfigTextBox.Text, $this.Argument)}
+        if($this.ConnectTextBox.Text){ $this.Argument = ("connect={0} {1}" -f $this.ConnectTextBox.Text, $this.Argument)}
+        if($this.CpuCountTextBox.Text){ $this.Argument = ("cpuCount={0} {1}" -f $this.CpuCountTextBox.Text, $this.Argument)}
+        if($this.ExThreadsTextBox.Text){ $this.Argument = ("exThreads={0} {1}" -f $this.ExThreadsTextBox.Text, $this.Argument)}
+        if($this.MaxMemTextBox.Text){ $this.Argument = ("maxMem={0} {1}" -f $this.MaxMemTextBox.Text, $this.Argument)}
+        ([InteractiveCommand]$this).Run()
+        $this.Form.Close()
+    }
 }
 
-class CopyCommand : BaseCommand
+class CopyCommand : LocalCommand
 {
     [String]$Source
     [String]$Destination
@@ -489,9 +383,8 @@ class CopyCommand : BaseCommand
         $this.Password = $password
     }
 
-    [void] OnClick([System.EventArgs]$e)
+    [void] Run()
     {
-        ([ToolStripMenuItem]$this).OnClick($e)
         Write-Host ("Mirroring {0} to {1}" -f $this.Source, $this.Destination)
         if($this.Username)
         {
@@ -550,13 +443,13 @@ class CopyCommand : BaseCommand
                 }
                 Write-Host -NoNewline ("Completed {0}: " -f $hostname)
                 Write-Host -NoNewline -ForegroundColor Green $newFiles
-                Write-Host -NoNewline " new files, "
+                Write-Host -NoNewline " new file(s), "
                 Write-Host -NoNewline -ForegroundColor DarkGreen $newerFiles
-                Write-Host -NoNewline " newer files, "
+                Write-Host -NoNewline " newer file(s), "
                 Write-Host -NoNewline -ForegroundColor Yellow $skippedFiles
-                Write-Host -NoNewline " skipped files, "
+                Write-Host -NoNewline " skipped file(s), "
                 Write-Host -NoNewline -ForegroundColor Red $deletedFiles
-                Write-Host " deleted files"
+                Write-Host " deleted file(s)"
             }
         }
         $timer = [Timer]::new()
@@ -589,9 +482,10 @@ class CopyCommand : BaseCommand
     }
 }
 
+# Entry point of the program
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.11"
+$root.Text = "Luokanhallinta v0.12"
 
 $script:table = [DataGridView]::new()
 $table.Dock = [DockStyle]::Fill
@@ -682,11 +576,65 @@ $table.Add_CellMouseUp({
     }
 })
 
-$script:menubar = [MenuStrip]::new()
+$menubar = [MenuStrip]::new()
 $root.MainMenuStrip = $menubar
 $menubar.Dock = [DockStyle]::Top
 $root.Controls.Add($menubar)
-[BaseCommand]::Display()
+$commands = [ordered]@{
+    "Valitse" = @(
+        [LocalCommand]::new("Kaikki", {$script:table.SelectAll()}),
+        [LocalCommand]::new("Käänteinen", {$script:table.Rows | ForEach-Object {$_.Cells | ForEach-Object { $_.Selected = !$_.Selected }}})
+        [LocalCommand]::new("Ei mitään", {$script:table.ClearSelection()})
+    )
+    "Tietokone" = @(
+        [LocalCommand]::new("Käynnistä", {
+            # Boots selected remote hosts by broadcasting the magic packet (Wake-On-LAN)
+            $macs = [Host]::Hosts | Where-Object {($script:table[($_.Column - 1), ($_.Row - 1)]).Selected -and $_} | ForEach-Object {$_.Mac} # Get mac addresses of selected hosts
+            $port = 9
+            $broadcast = [Net.IPAddress]::Parse("255.255.255.255")
+            foreach($m in $macs)
+            {
+                $m = (($m.replace(":", "")).replace("-", "")).replace(".", "")
+                $target = 0, 2, 4, 6, 8, 10 | ForEach-Object {[convert]::ToByte($m.substring($_, 2), 16)}
+                $packet = (,[byte]255 * 6) + ($target * 16) # Creates the magic packet
+                $UDPclient = [System.Net.Sockets.UdpClient]::new()
+                $UDPclient.Connect($broadcast, $port)
+                $UDPclient.Send($packet, 102) # Sends the magic packet
+            }
+        })
+        [InteractiveCommand]::new("Virus scan", "fsav.exe", "/disinf C: D: ", "C:\Program Files (x86)\F-Secure\Anti-Virus")
+        [RemoteCommand]::new("Käynnistä uudelleen", $true, @(), {shutdown /r /t 10 /c 'Luokanhallinta on ajastanut uudelleen käynnistyksen'})
+        [RemoteCommand]::new("Sammuta", $true, @(), {shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"})
+    )
+    "VBS3" = @(
+        [VBS3Command]::new("Käynnistä...")
+        [CopyCommand]::new("Synkkaa addonit", "\\10.130.16.2\addons", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista")
+        [CopyCommand]::new("Synkkaa asetukset", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "", "")
+        [RemoteCommand]::new("Sulje", $true, @(), {Stop-Process -ProcessName VBS3_64})
+    )
+    "SteelBeasts" = @(
+        [InteractiveCommand]::new("Käynnistä", "SBPro64CM.exe", "", "C:\Program Files\eSim Games\SB Pro FI\Release")
+        [RemoteCommand]::new("Sulje", $true, @(), {Stop-Process -ProcessName SBPro64CM})
+    )
+    "Muu" = @(
+        [LocalCommand]::new("Päivitä", {[Host]::Populate("$PSScriptRoot\luokka.csv", " "); [Host]::Display()})
+        # [LocalCommand]::new("Vaihda käyttäjä...", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
+        # [InteractiveCommand]::new("Chrome", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
+        [LocalCommand]::new("Sulje", {$script:root.Close()})
+    )
+} 
+foreach($category in $commands.keys) # Iterates over command categories
+{
+    # Create a menu for each category
+    $menu = [ToolStripMenuItem]::new()
+    $menu.Text = $category
+    $menubar.Items.Add($menu) | Out-Null
+    foreach($command in $commands[$category]) # Iterates over commands in each category
+    {
+        # Add command to menu
+        $menu.DropDownItems.Add($command) | Out-Null
+    }
+}
 
 $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)
-[void]$root.showDialog()
+$root.showDialog() | Out-Null
