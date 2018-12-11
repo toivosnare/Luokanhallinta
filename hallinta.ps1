@@ -24,17 +24,16 @@ class Host
         # Creates [Host] objects from given .csv file
         Write-Host ("Populating from {0}" -f $path)
         [Host]::Hosts = @()
-        Get-Job | Remove-Job
         Import-Csv $path -Delimiter $delimiter | ForEach-Object {
             $h = [Host]::new($_.Name, $_.Mac, [Int]$_.Column, [Int]$_.Row)
             $pingJob = Test-Connection -ComputerName $h.Name -Count 1 -AsJob
             $h | Add-Member -NotePropertyName "pingJob" -NotePropertyValue $pingJob -Force
             [Host]::Hosts += $h
         }
-        Get-Job | Wait-Job
         $needToExport = $false
         foreach($h in [Host]::Hosts)
         {
+            $h.pingJob | Wait-Job
             if((Receive-Job $h.pingJob).StatusCode -eq 0){ $h.Status = $true } # else $false
             if(!$h.Mac)
             {
@@ -51,9 +50,9 @@ class Host
                 }
             }
             Write-Host ("{0}: mac={1}, status={2}, column={3}, row={4}" -f $h.Name, $h.Mac, $h.Status, $h.Column, $h.Row)
+            $h.pingJob | Remove-Job
         }
         if($needToExport){ [Host]::Export($path, $delimiter) }
-        Get-Job | Remove-Job
     }
 
     static [void] Display()
@@ -101,10 +100,16 @@ class Host
         [Host]::Hosts | Select-Object Name, Mac, Column, Row | Export-Csv $path -Delimiter $delimiter -NoTypeInformation
     }
 
+    static [String[]] GetActive()
+    {
+        # Returns the names of the hosts that are online and selected
+        return ([Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name})
+    }
+
     static [void] Run([Bool]$AsJob, [Object[]]$Params, [ScriptBlock]$command)
     {
         # Runs a specified commands on all selected remote hosts
-        $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name} # Gets the names of the hosts that are online and selected
+        $hostnames = [Host]::GetActive() 
         if ($null -eq $hostnames) { return }
         Write-Host ("Running '{0}' on {1}" -f $command, [String]$hostnames)
         if($AsJob)
@@ -120,7 +125,7 @@ class Host
     static [void] Run([String]$executable, [String]$argument, [String]$workingDirectory)
     {
         # Runs a specified interactive program on all selected remote hosts by creating a scheduled task on currently logged on user then running it and finally deleting it
-        $hostnames = [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name}
+        $hostnames = [Host]::GetActive()
         if ($null -eq $hostnames) { return }
         Write-Host ("Running {0}\{1} {2} on {3}" -f $workingDirectory, $executable, $argument, [String]$hostnames)
         Invoke-Command -ComputerName $hostnames -Credential $script:credential -ArgumentList $executable, $argument, $workingDirectory -AsJob -ScriptBlock {
@@ -186,10 +191,8 @@ class BaseCommand : ToolStripMenuItem
         )
         "VBS3" = @(
             [VBS3Command]::new("Käynnistä...")
-            #[CopyCommand]::new("Synkkaa addonit...", "\\10.130.16.2\Addons", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista", "/MIR")
-            #[CopyCommand]::new("Synkkaa asetukset...", ("\\{0}\VBS3" -f (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {$_.IPAddress.Length -gt 1 -and $_.IPAddress -ne "127.0.0.1"} | Select-Object -ExpandProperty IPAddress)), "$ENV:USERPROFILE\Documents\VBS3", $(whoami), "", "$ENV:USERNAME.VBS3Profile")
-            [NewCopyCommand]::new("Synkkaa addonit", "\\10.130.16.2\addons", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista")
-            [NewCopyCommand]::new("Synkkaa asetukset", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "", "")
+            [CopyCommand]::new("Synkkaa addonit", "\\10.130.16.2\addons", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista")
+            [CopyCommand]::new("Synkkaa asetukset", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "", "")
             [BaseCommand]::new("Sulje", {[Host]::Run($true, @(), {Stop-Process -ProcessName VBS3_64})})
         )
         "SteelBeasts" = @(
@@ -473,137 +476,12 @@ class VBS3Command : BaseCommand
 
 class CopyCommand : BaseCommand
 {
-    [Form]$Form
-    [TableLayoutPanel]$Grid
-    [Label]$SourceLabel
-    [TextBox]$sourceTextBox
-    [Label]$DestinationLabel
-    [TextBox]$DestinationTextBox
-    [Label]$UsernameLabel
-    [TextBox]$UsernameTextBox
-    [Label]$PasswordLabel
-    [TextBox]$PasswordTextBox
-    [Label]$ArgumentLabel
-    [TextBox]$ArgumentTextBox
-    [Button]$RunButton
-    [ScriptBlock]$ClickScript = {
-        [Host]::Run($false, @($this.Source.Text, $this.Destination.Text, $this.Username.Text, $this.Password.Text, $this.Argument.Text), {
-            param(
-                [String]$source,
-                [String]$destination,
-                [String]$username,
-                [String]$password,
-                [String]$argument
-            )
-            # Write-Host ("{0}, {1}, {2}, {3}, {4}" -f $source, $destination, $username, $password, $argument)
-            if(!$password){ $password = """" }
-            net.exe use $source /user:$username $password
-            Robocopy.exe "$source" "$destination" "$argument"
-            net.exe use /delete $source
-        })
-    }
-
-    CopyCommand([String]$name, [String]$source, [String]$destination, [String]$username, [String]$password, [String]$argument) : base($name)
-    {
-        $this.Form = [Form]::new()
-        $this.Form.AutoSize = $true
-        $this.Form.FormBorderStyle = [FormBorderStyle]::FixedToolWindow
-        $this.Form.Text = $this.Text
-
-        $this.Grid = [TableLayoutPanel]::new()
-        $this.Grid.AutoSize = $true
-        $this.Grid.ColumnCount = 2
-        $this.Grid.Padding = [Padding]::new(10)
-        $this.Grid.CellBorderStyle = [TableLayoutPanelCellBorderStyle]::Inset
-
-        $this.SourceLabel = [Label]::new()
-        $this.SourceLabel.Text = "Lähde:"
-        $this.SourceLabel.AutoSize = $true
-        $this.SourceLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.SourceLabel, [TableLayoutPanelCellPosition]::new(0, 0)) 
-        $this.Grid.Controls.Add($this.SourceLabel)
-        $this.SourceTextBox = [TextBox]::new()
-        $this.SourceTextBox.Width = 200
-        $this.SourceTextBox.Text = $source
-        $this.Grid.SetCellPosition($this.SourceTextBox, [TableLayoutPanelCellPosition]::new(1, 0)) 
-        $this.Grid.Controls.Add($this.SourceTextBox)
-
-        $this.DestinationLabel = [Label]::new()
-        $this.DestinationLabel.Text = "Kohde:"
-        $this.DestinationLabel.AutoSize = $true
-        $this.DestinationLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.DestinationLabel, [TableLayoutPanelCellPosition]::new(0, 1)) 
-        $this.Grid.Controls.Add($this.DestinationLabel)
-        $this.DestinationTextBox = [TextBox]::new()
-        $this.DestinationTextBox.Width = 200
-        $this.DestinationTextBox.Text = $destination
-        $this.Grid.SetCellPosition($this.DestinationTextBox, [TableLayoutPanelCellPosition]::new(1, 1)) 
-        $this.Grid.Controls.Add($this.DestinationTextBox)
-
-        $this.UsernameLabel = [Label]::new()
-        $this.UsernameLabel.Text = "Käyttäjänimi:"
-        $this.UsernameLabel.AutoSize = $true
-        $this.UsernameLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.UsernameLabel, [TableLayoutPanelCellPosition]::new(0, 2)) 
-        $this.Grid.Controls.Add($this.UsernameLabel)
-        $this.UsernameTextBox = [TextBox]::new()
-        $this.UsernameTextBox.Width = 200
-        $this.UsernameTextBox.Text = $username
-        $this.Grid.SetCellPosition($this.UsernameTextBox, [TableLayoutPanelCellPosition]::new(1, 2)) 
-        $this.Grid.Controls.Add($this.UsernameTextBox)
-
-        $this.PasswordLabel = [Label]::new()
-        $this.PasswordLabel.Text = "Salasana:"
-        $this.PasswordLabel.AutoSize = $true
-        $this.PasswordLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.PasswordLabel, [TableLayoutPanelCellPosition]::new(0, 3)) 
-        $this.Grid.Controls.Add($this.PasswordLabel)
-        $this.PasswordTextBox = [TextBox]::new()
-        $this.PasswordTextBox.Width = 200
-        $this.PasswordTextBox.Text = $password
-        $this.PasswordTextBox.PasswordChar = "*"
-        $this.Grid.SetCellPosition($this.PasswordTextBox, [TableLayoutPanelCellPosition]::new(1, 3)) 
-        $this.Grid.Controls.Add($this.PasswordTextBox)
-
-        $this.ArgumentLabel = [Label]::new()
-        $this.ArgumentLabel.Text = "Parametri:"
-        $this.ArgumentLabel.AutoSize = $true
-        $this.ArgumentLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.ArgumentLabel, [TableLayoutPanelCellPosition]::new(0, 4)) 
-        $this.Grid.Controls.Add($this.ArgumentLabel)
-        $this.ArgumentTextBox = [TextBox]::new()
-        $this.ArgumentTextBox.Width = 200
-        $this.ArgumentTextBox.Text = $argument
-        $this.Grid.SetCellPosition($this.ArgumentTextBox, [TableLayoutPanelCellPosition]::new(1, 4)) 
-        $this.Grid.Controls.Add($this.ArgumentTextBox)
-
-        $this.RunButton = [Button]::new()
-        $this.RunButton.Text = "Kopioi"
-        $this.RunButton = $this.RunButton | Add-Member @{Source=$this.SourceTextBox; Destination=$this.DestinationTextBox; Username=$this.UsernameTextBox; Password=$this.PasswordTextBox; Argument=$this.ArgumentTextBox} -PassThru -Force
-        $this.RunButton.Add_Click($this.ClickScript)
-        $this.RunButton.Dock = [DockStyle]::Bottom
-        $this.Grid.SetCellPosition($this.RunButton, [TableLayoutPanelCellPosition]::new(0, 5))
-        $this.Grid.SetColumnSpan($this.RunButton, 2)
-        $this.Form.AcceptButton = $this.RunButton
-        $this.Grid.Controls.Add($this.RunButton)
-        $this.Form.Controls.Add($this.Grid)
-    }
-
-    [void] OnClick([System.EventArgs]$e)
-    {
-        ([ToolStripMenuItem]$this).OnClick($e)
-        $this.Form.ShowDialog()
-    }
-}
-
-class NewCopyCommand : BaseCommand
-{
     [String]$Source
     [String]$Destination
     [String]$Username
     [String]$Password
 
-    NewCopyCommand([String]$name, [String]$source, [String]$destination, [String]$username, [String]$password) : base($name)
+    CopyCommand([String]$name, [String]$source, [String]$destination, [String]$username, [String]$password) : base($name)
     {
         $this.Source = $source
         $this.Destination = $destination
@@ -621,65 +499,99 @@ class NewCopyCommand : BaseCommand
             $p = $this.Password
             net.exe use $this.Source /user:$u $p
         }
-        [Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {
-            Write-Host -ForegroundColor Magenta $_.Name
-            $session = New-PSSession -ComputerName $_.Name
-            Get-ChildItem $this.Source | ForEach-Object {
-                $sourcePath = $_.FullName
-                $destinationPath = $sourcePath.Replace($this.Source, $this.Destination)
-
-                Write-Host -NoNewline ("{0}: " -f $_)
-                if(Test-Path $destinationPath)
-                {
-                    $sourceFile = Get-Item $sourcePath
-                    $destinationFile = Invoke-Command -Session $session -ArgumentList $destinationPath -ScriptBlock {
-                        param([String]$destinationPath)
-                        $destinationFile = Get-Item $destinationPath
-                        return $destinationFile
-                    }
-                    if($sourceFile.LastWriteTime -gt $destinationFile.LastWriteTime)
+        $name = (Get-Item $this.Source).Name + "Sync"
+        [Host]::GetActive() | ForEach-Object {
+            $job = Start-Job -Name $name -ArgumentList $_, $this.Source, $this.Destination -ScriptBlock {
+                param(
+                    [String]$hostname,
+                    [String]$sourcePath,
+                    [String]$destinationPath
+                )
+                $newFiles = 0
+                $newerFiles = 0
+                $skippedFiles = 0
+                $deletedFiles = 0
+                $session = New-PSSession -ComputerName $hostname
+                Get-ChildItem $sourcePath | ForEach-Object {
+                    $sourceItem = $_.FullName
+                    $destinationItem = $sourceItem.Replace($sourcePath, $destinationPath)
+                    if(Test-Path $destinationItem)
                     {
-                        Write-Host -ForegroundColor Yellow "newer version, copying"
-                        Copy-Item $sourcePath -Destination $destinationPath -ToSession $session -Force
+                        $sourceFile = Get-Item $sourceItem
+                        $destinationFile = Invoke-Command -Session $session -ArgumentList $destinationItem -ScriptBlock {
+                            param([String]$destinationItem)
+                            $destinationFile = Get-Item $destinationItem
+                            return $destinationFile
+                        }
+                        if($sourceFile.LastWriteTime -gt $destinationFile.LastWriteTime)
+                        {
+                            $newerFiles += 1
+                            Copy-Item $sourceItem -Destination $destinationItem -ToSession $session -Force
+                        }
+                        else
+                        {
+                            $skippedFiles += 1
+                        }
                     }
                     else
                     {
-                        Write-Host -ForegroundColor Green "already in place, skipping"  
+                        $newFiles += 1
+                        Copy-Item $sourceItem -Destination $destinationItem -ToSession $session
                     }
+                }
+                Get-ChildItem $destinationPath | ForEach-Object {
+                    $destinationItem = $_.FullName
+                    $sourceItem = $destinationItem.Replace($destinationPath, $sourcePath)
+                    if((Test-Path $sourceItem) -eq $false)
+                    {
+                        $deletedFiles += 1
+                        Remove-Item $destinationItem
+                    }
+                }
+                Write-Host -NoNewline ("Completed {0}: " -f $hostname)
+                Write-Host -NoNewline -ForegroundColor Green $newFiles
+                Write-Host -NoNewline " new files, "
+                Write-Host -NoNewline -ForegroundColor DarkGreen $newerFiles
+                Write-Host -NoNewline " newer files, "
+                Write-Host -NoNewline -ForegroundColor Yellow $skippedFiles
+                Write-Host -NoNewline " skipped files, "
+                Write-Host -NoNewline -ForegroundColor Red $deletedFiles
+                Write-Host " deleted files"
+            }
+        }
+        $timer = [Timer]::new()
+        $timer.Interval = 1000
+        $timer | Add-Member @{Name=$name; Username=$this.Username; Source=$this.Source}
+        $timer.Add_Tick({
+            $finished = $true
+            Get-Job -Name $this.Name | ForEach-Object {
+                if($_.State -eq "Completed")
+                {
+                    $_ | Receive-Job | Write-Host
+                    $_ | Remove-Job
                 }
                 else
                 {
-                    Write-Host -ForegroundColor Yellow "not found, copying"
-                    Copy-Item $sourcePath -Destination $destinationPath -ToSession $session
+                    $finished = $false
                 }
             }
-            Get-ChildItem $destination | ForEach-Object {
-                $destinationPath = $_.FullName
-                $sourcePath = $destinationPath.Replace($this.Destination, $this.Source)
-                if((Test-Path $sourcePath) -eq $false)
+            if($finished)
+            {
+                $this.Dispose()
+                if($this.Username)
                 {
-                    Write-Host -ForegroundColor Red ("{0} not in {1}, removing" -f $_, $this.Source)
-                    Remove-Item $destinationPath
+                    net.exe use /delete $this.Source
                 }
+                Write-Host "Finished"
             }
-        }
-        if($this.Username)
-        {
-            net.exe use /delete $this.Source
-        }
-        Write-Host "Done"
+        })
+        $timer.Start()
     }
 }
 
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
-# if(!(Get-SmbShare -Name "VBS3" -ErrorAction SilentlyContinue))
-# {
-#     $path = "$ENV:USERPROFILE\Documents\VBS3"
-#     Write-Host -ForegroundColor Red "$path not shared, creating SMB share..."
-#     New-SmbShare -Name "VBS3" -Path $path -Description "Tarvitaan luokanhallintaohjelman asetussynkkiin"
-# }
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.10"
+$root.Text = "Luokanhallinta v0.11"
 
 $script:table = [DataGridView]::new()
 $table.Dock = [DockStyle]::Fill
