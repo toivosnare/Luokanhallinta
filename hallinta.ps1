@@ -507,7 +507,7 @@ class CopyCommand : LocalCommand
 # Entry point of the program
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.13"
+$root.Text = "Luokanhallinta v0.14"
 
 $script:table = [DataGridView]::new()
 $table.Dock = [DockStyle]::Fill
@@ -632,6 +632,7 @@ $commands = [ordered]@{
         [VBS3Command]::new("Käynnistä...")
         [CopyCommand]::new("Synkkaa addonit", "\\10.130.16.2\addons", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista")
         [CopyCommand]::new("Synkkaa asetukset", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "", "")
+        [CopyCommand]::new("Synkkaa missionit", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions", "", "")
         [RemoteCommand]::new("Sulje", $true, @(), {Stop-Process -ProcessName VBS3_64})
     )
     "SteelBeasts" = @(
@@ -640,8 +641,7 @@ $commands = [ordered]@{
     )
     "Muu" = @(
         [LocalCommand]::new("Päivitä", {[Host]::Populate("$PSScriptRoot\luokka.csv", " "); [Host]::Display()})
-        # [LocalCommand]::new("Vaihda käyttäjä...", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
-        # [InteractiveCommand]::new("Chrome", "chrome.exe", "", "C:\Program Files (x86)\Google\Chrome\Application")
+        [LocalCommand]::new("Vaihda käyttäjä...", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
         [LocalCommand]::new("Sulje", {$script:root.Close()})
     )
 } 
@@ -658,5 +658,22 @@ foreach($category in $commands.keys) # Iterates over command categories
     }
 }
 
-$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)
+$username = $(whoami)
+$password = ""
+# If default credentials are specified, use them instead of getting them from Get-Credential
+if($username)
+{
+    if($password){
+        $password = ConvertTo-SecureString $password -AsPlainText -Force
+        $script:credential = [System.Management.Automation.PSCredential]::new($username, $password)
+    }
+    else
+    {
+        $script:credential = [System.Management.Automation.PSCredential]::new($username)
+    }
+}
+else
+{
+    $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)
+}
 $root.showDialog() | Out-Null
