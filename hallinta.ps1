@@ -33,9 +33,9 @@ class Host
         $needToExport = $false
         foreach($h in [Host]::Hosts)
         {
-            $h.pingJob | Wait-Job
+            $h.pingJob | Wait-Job # Wait for the ping to complete
             if((Receive-Job $h.pingJob).StatusCode -eq 0){ $h.Status = $true } # else $false
-            if(!$h.Mac)
+            if(!$h.Mac) # Try to get missing mac-address if not populated from the file
             {
                 Write-Host -NoNewline -ForegroundColor Red ("Missing mac-address of {0}, " -f $h.Name)
                 if($h.Status)
@@ -49,6 +49,7 @@ class Host
                     Write-Host -ForegroundColor Red "unable to connect to offline host!"
                 }
             }
+            # Display populate status in console
             Write-Host -NoNewline ("{0}: mac={1}, status=" -f $h.Name, $h.Mac)
             if($h.Status)
             {
@@ -62,7 +63,7 @@ class Host
             Write-Host (", column={0}, row={1}" -f $h.Column, $h.Row)
             $h.pingJob | Remove-Job
         }
-        if($needToExport){ [Host]::Export($path, $delimiter) }
+        if($needToExport){ [Host]::Export($path, $delimiter) } # Save received mac-address back to file
     }
 
     static [void] Display()
@@ -85,7 +86,7 @@ class Host
             $_.Height = $cellSize
         }
         $script:root.MinimumSize = [System.Drawing.Size]::new(($cellSize * $script:table.ColumnCount + $script:table.RowHeadersWidth + 20), ($cellSize * $script:table.RowCount + $script:table.ColumnHeadersHeight + 65))
-        $script:root.Size = [System.Drawing.Size]::new(315, $script:root.MinimumSize.Height) # Hardcode XD
+        $script:root.Size = [System.Drawing.Size]::new(315, $script:root.MinimumSize.Height) # The size of the window can't be smaller than the minimum size (sorry for the hardcode btw)
         foreach($h in [Host]::Hosts)
         {
             $cell = $script:table[($h.Column - 1), ($h.Row - 1)]
@@ -119,6 +120,7 @@ class Host
 
 class LocalCommand : ToolStripMenuItem
 {
+    # Basic command that runs specified script onclick
     [Scriptblock]$Script
 
     LocalCommand([String]$name, [Scriptblock]$script) : base($name)
@@ -142,6 +144,7 @@ class LocalCommand : ToolStripMenuItem
 
 class RemoteCommand : LocalCommand
 {
+    # Runs specified script on remote hosts (WinRM)
     [Bool]$AsJob
     [Object[]]$Params
     [ScriptBlock]$Command
@@ -171,6 +174,7 @@ class RemoteCommand : LocalCommand
 
 class InteractiveCommand : LocalCommand
 {
+    # Runs specified program interactively on the active session of remote hosts (WinRM)
     [String]$Executable
     [String]$Argument
     [String]$WorkingDirectory
@@ -184,6 +188,7 @@ class InteractiveCommand : LocalCommand
 
     [void] Run()
     {
+        # Creates, runs and removes Windows scheduled task that runs specified program interactively on the locally logged on user
         $hostnames = [Host]::GetActive()
         if ($null -eq $hostnames) { return }
         Write-Host ("Running {0}\{1} {2} on {3}" -f $this.WorkingDirectory, $this.Executable, $this.Argument, [String]$hostnames)
@@ -216,6 +221,7 @@ class InteractiveCommand : LocalCommand
 
 class VBS3Command : InteractiveCommand
 {
+    # Command with GUI to run VBS3 with specified startup parameters
     [Form]$Form
     [TableLayoutPanel]$Grid
     [FlowLayoutPanel]$StatePanel
@@ -370,6 +376,7 @@ class VBS3Command : InteractiveCommand
 
 class CopyCommand : LocalCommand
 {
+    # Mirrors files from specified source to remote hosts in parallel (SMB)
     [String]$Source
     [String]$Destination
     [String]$Username
@@ -385,16 +392,25 @@ class CopyCommand : LocalCommand
 
     [void] Run()
     {
-        Write-Host ("Mirroring {0} to {1}" -f $this.Source, $this.Destination)
-        if($this.Username)
+        if($this.Username) # TODO: maybe add option to specify credentials for the destination also?
         {
             $u = $this.Username
             $p = $this.Password
             net.exe use $this.Source /user:$u $p
+            if($LASTEXITCODE -ne 0){ return } # Check that the source is available and the credentials are accepted
         }
+        else
+        {
+            if(!(Test-Path $this.Source))
+            {
+                Write-Host ("Cannot find source: {0}" -f $this.Source)
+                return
+            }    
+        }
+        Write-Host ("Mirroring {0} to {1}" -f $this.Source, $this.Destination)
         $name = (Get-Item $this.Source).Name + "Sync"
         [Host]::GetActive() | ForEach-Object {
-            $job = Start-Job -Name $name -ArgumentList $_, $this.Source, $this.Destination -ScriptBlock {
+            Start-Job -Name $name -ArgumentList $_, $this.Source, $this.Destination -ScriptBlock {
                 param(
                     [String]$hostname,
                     [String]$sourcePath,
@@ -405,10 +421,10 @@ class CopyCommand : LocalCommand
                 $skippedFiles = 0
                 $deletedFiles = 0
                 $session = New-PSSession -ComputerName $hostname
-                Get-ChildItem $sourcePath | ForEach-Object {
+                Get-ChildItem $sourcePath | ForEach-Object { # Iterate over all files in the source
                     $sourceItem = $_.FullName
                     $destinationItem = $sourceItem.Replace($sourcePath, $destinationPath)
-                    if(Test-Path $destinationItem)
+                    if(Test-Path $destinationItem) # Check if the same file/path is found in the destination
                     {
                         $sourceFile = Get-Item $sourceItem
                         $destinationFile = Invoke-Command -Session $session -ArgumentList $destinationItem -ScriptBlock {
@@ -416,28 +432,32 @@ class CopyCommand : LocalCommand
                             $destinationFile = Get-Item $destinationItem
                             return $destinationFile
                         }
-                        if($sourceFile.LastWriteTime -gt $destinationFile.LastWriteTime)
+                        if($sourceFile.LastWriteTime -gt $destinationFile.LastWriteTime) # Check if the source file is newer than the destination
                         {
-                            $newerFiles += 1
+                            # Copy newer version of the file from source to destination
+                            $newerFiles++
                             Copy-Item $sourceItem -Destination $destinationItem -ToSession $session -Force
                         }
                         else
                         {
-                            $skippedFiles += 1
+                            # If there are no changes skip the file
+                            $skippedFiles++
                         }
                     }
                     else
                     {
-                        $newFiles += 1
+                        # Copy new file to from source to destination
+                        $newFiles++
                         Copy-Item $sourceItem -Destination $destinationItem -ToSession $session
                     }
                 }
-                Get-ChildItem $destinationPath | ForEach-Object {
+                Get-ChildItem $destinationPath | ForEach-Object { # Iterate over all files in the destination
                     $destinationItem = $_.FullName
                     $sourceItem = $destinationItem.Replace($destinationPath, $sourcePath)
-                    if((Test-Path $sourceItem) -eq $false)
+                    if((Test-Path $sourceItem) -eq $false) # Check if there are any extra files that are not in the source
                     {
-                        $deletedFiles += 1
+                        # Remove extra files from the destination
+                        $deletedFiles++
                         Remove-Item $destinationItem
                     }
                 }
@@ -452,15 +472,16 @@ class CopyCommand : LocalCommand
                 Write-Host " deleted file(s)"
             }
         }
+        # After the mirror jobs are started, create a timer that check periodically which jobs have finished
         $timer = [Timer]::new()
         $timer.Interval = 1000
-        $timer | Add-Member @{Name=$name; Username=$this.Username; Source=$this.Source}
+        $timer | Add-Member @{Name=$name; Username=$this.Username; Source=$this.Source} # Attach these properties to the $timer object so that they are usable inside the tick event handler
         $timer.Add_Tick({
             $finished = $true
             Get-Job -Name $this.Name | ForEach-Object {
                 if($_.State -eq "Completed")
                 {
-                    $_ | Receive-Job | Write-Host
+                    $_ | Receive-Job | Write-Host # Display mirror result
                     $_ | Remove-Job
                 }
                 else
@@ -470,11 +491,12 @@ class CopyCommand : LocalCommand
             }
             if($finished)
             {
-                $this.Dispose()
+                # When all the mirrors are complete, remove the timer
                 if($this.Username)
                 {
                     net.exe use /delete $this.Source
                 }
+                $this.Dispose()
                 Write-Host "Finished"
             }
         })
@@ -485,7 +507,7 @@ class CopyCommand : LocalCommand
 # Entry point of the program
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.12"
+$root.Text = "Luokanhallinta v0.13"
 
 $script:table = [DataGridView]::new()
 $table.Dock = [DockStyle]::Fill
