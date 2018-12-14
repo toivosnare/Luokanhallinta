@@ -392,7 +392,7 @@ class CopyCommand : LocalCommand
 
     [void] Run()
     {
-        if($this.Username) # TODO: maybe add option to specify credentials for the destination also?
+        if($this.Username)
         {
             $u = $this.Username
             $p = $this.Password
@@ -407,97 +407,133 @@ class CopyCommand : LocalCommand
                 return
             }    
         }
-        Write-Host ("Mirroring {0} to {1}" -f $this.Source, $this.Destination)
-        $name = (Get-Item $this.Source).Name + "Sync"
+        Write-Host "Mirroring"
+        $sourceItems = Get-ChildItem $this.Source
+        $jobs = @()
         [Host]::GetActive() | ForEach-Object {
-            Start-Job -Name $name -ArgumentList $_, $this.Source, $this.Destination -ScriptBlock {
+            $jobs += Start-Job -ArgumentList $_, $sourceItems, $this.Destination -ScriptBlock {
                 param(
                     [String]$hostname,
-                    [String]$sourcePath,
-                    [String]$destinationPath
+                    [Object[]]$sourceItems,
+                    [String]$destination
                 )
-                $newFiles = 0
-                $newerFiles = 0
-                $skippedFiles = 0
-                $deletedFiles = 0
                 $session = New-PSSession -ComputerName $hostname
-                Get-ChildItem $sourcePath | ForEach-Object { # Iterate over all files in the source
-                    $sourceItem = $_.FullName
-                    $destinationItem = $sourceItem.Replace($sourcePath, $destinationPath)
-                    if(Test-Path $destinationItem) # Check if the same file/path is found in the destination
-                    {
-                        $sourceFile = Get-Item $sourceItem
-                        $destinationFile = Invoke-Command -Session $session -ArgumentList $destinationItem -ScriptBlock {
-                            param([String]$destinationItem)
-                            $destinationFile = Get-Item $destinationItem
-                            return $destinationFile
-                        }
-                        if($sourceFile.LastWriteTime -gt $destinationFile.LastWriteTime) # Check if the source file is newer than the destination
+                $items = Invoke-Command -Session $session -ArgumentList $sourceItems, $destination -ScriptBlock {
+                    param(
+                        [Object[]]$sourceItems,
+                        [String]$destination
+                    )
+                    $newItems = @()
+                    $newerItems = @()
+                    $skippedItems = @()
+                    $removedItems = @()
+                    $sourceNames = @()
+                    $sourceItems | ForEach-Object {
+                        $sourceNames += $_.Name
+                        if((Get-Item $destination).PSIsContainer)
                         {
-                            # Copy newer version of the file from source to destination
-                            $newerFiles++
-                            Copy-Item $sourceItem -Destination $destinationItem -ToSession $session -Force
+                            $destinationItem = Join-Path -Path $destination -ChildPath $_.Name
                         }
                         else
                         {
-                            # If there are no changes skip the file
-                            $skippedFiles++
+                            $destinationItem = $destination    
                         }
+                        if(Test-Path $destinationItem)
+                        {
+                            $sourceTime = $_.LastWriteTime
+                            $destinationTime = (Get-Item $destinationItem).LastWriteTime
+                            if($sourceTime -gt $destinationTime)
+                            {
+                                $newerItems += $_
+                            }
+                            else
+                            {
+                                $skippedItems += $_
+                            }
+                        }
+                        else
+                        {
+                            $newItems += $_
+                        }
+                    }
+                    Get-ChildItem $destination | ForEach-Object {
+                        if(!($sourceNames.Contains($_.Name)))
+                        {
+                            $removedItems += $_
+                            Remove-Item $_.FullName
+                        }
+                    }
+                    $items = New-Object PsObject -Property @{New=$newItems; Newer=$newerItems; Skip=$skippedItems; Remove=$removedItems}
+                    return $items
+                }
+                $neededItems = $items.New + $items.Newer
+                $totalSize = ($neededItems | Measure-Object -Property Length -Sum).Sum
+                $processedSize = 0
+                $neededItems | ForEach-Object {
+                    Write-Output (100*$processedSize/$totalSize)
+                    if((Get-Item $destination).PSIsContainer)
+                    {
+                        $destinationPath = Join-Path -Path $destination -ChildPath $_.Name
                     }
                     else
                     {
-                        # Copy new file to from source to destination
-                        $newFiles++
-                        Copy-Item $sourceItem -Destination $destinationItem -ToSession $session
+                        $destinationPath = $destination
                     }
+                    Copy-Item $_.FullName -Destination $destinationPath -ToSession $session
+                    $processedSize += $_.Length
                 }
-                Get-ChildItem $destinationPath | ForEach-Object { # Iterate over all files in the destination
-                    $destinationItem = $_.FullName
-                    $sourceItem = $destinationItem.Replace($destinationPath, $sourcePath)
-                    if((Test-Path $sourceItem) -eq $false) # Check if there are any extra files that are not in the source
-                    {
-                        # Remove extra files from the destination
-                        $deletedFiles++
-                        Remove-Item $destinationItem
-                    }
-                }
-                Write-Host -NoNewline ("Completed {0}: " -f $hostname)
-                Write-Host -NoNewline -ForegroundColor Green $newFiles
-                Write-Host -NoNewline " new file(s), "
-                Write-Host -NoNewline -ForegroundColor DarkGreen $newerFiles
-                Write-Host -NoNewline " newer file(s), "
-                Write-Host -NoNewline -ForegroundColor Yellow $skippedFiles
-                Write-Host -NoNewline " skipped file(s), "
-                Write-Host -NoNewline -ForegroundColor Red $deletedFiles
-                Write-Host " deleted file(s)"
+                Remove-PSSession $session
+                $items | Add-Member @{Hostname=$hostname}
+                Write-Output $items
             }
         }
-        # After the mirror jobs are started, create a timer that check periodically which jobs have finished
         $timer = [Timer]::new()
-        $timer.Interval = 1000
-        $timer | Add-Member @{Name=$name; Username=$this.Username; Source=$this.Source} # Attach these properties to the $timer object so that they are usable inside the tick event handler
+        $timer.Interval = 100
+        $jobs | ForEach-Object {$_ | Add-Member @{P=0}}
+        $timer | Add-Member @{Jobs=$jobs; Username=$this.Username; Source=$this.Source}
         $timer.Add_Tick({
             $finished = $true
-            Get-Job -Name $this.Name | ForEach-Object {
-                if($_.State -eq "Completed")
+            $this.Jobs | ForEach-Object {
+                $output = Receive-Job $_
+                if($output -ne $null)
                 {
-                    $_ | Receive-Job | Write-Host # Display mirror result
-                    $_ | Remove-Job
+                    if($output.GetType() -eq [System.Int32] -or $output.GetType() -eq [System.Double])
+                    {
+                        $_.P = $output
+                    }
+                    elseif($output.GetType() -eq [System.Management.Automation.PSCustomObject])
+                    {
+                        Write-Host -NoNewline ("Completed {0}: " -f $output.Hostname)
+                        Write-Host -NoNewline -ForegroundColor Green $output.New.Count
+                        Write-Host -NoNewline " new file(s), "
+                        Write-Host -NoNewline -ForegroundColor DarkGreen $output.Newer.Count
+                        Write-Host -NoNewline " newer file(s), "
+                        Write-Host -NoNewline -ForegroundColor Yellow $output.Skip.Count
+                        Write-Host -NoNewline " skipped file(s), "
+                        Write-Host -NoNewline -ForegroundColor Red $output.Remove.Count
+                        Write-Host " removed file(s)"
+                    }
                 }
-                else
+                if($_.State -ne "Completed")
                 {
                     $finished = $false
                 }
             }
-            if($finished)
+            if(!$finished)
             {
-                # When all the mirrors are complete, remove the timer
+                $average = ($this.Jobs | Measure-Object -Property P -Average).Average
+                Write-Progress -Activity "Sync" -Status "Mirroring" -PercentComplete $average
+            }
+            else
+            {
+                $this.Jobs | Remove-Job
                 if($this.Username)
                 {
                     net.exe use /delete $this.Source
                 }
-                $this.Dispose()
+                Write-Progress -Activity "Sync" -Status "Finished" -Completed
                 Write-Host "Finished"
+                $this.Dispose()
             }
         })
         $timer.Start()
@@ -507,7 +543,7 @@ class CopyCommand : LocalCommand
 # Entry point of the program
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.14"
+$root.Text = "Luokanhallinta v0.15"
 
 $script:table = [DataGridView]::new()
 $table.Dock = [DockStyle]::Fill

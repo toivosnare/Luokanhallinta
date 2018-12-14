@@ -30,12 +30,13 @@ sc.exe config "WinRM" start=auto
 Set-Item WSMan:\localhost\Client\TrustedHosts -value "10.132.0.*" # Esim.
 ```
 
-5. Luo välilyönnein erotettu "luokka.csv" tiedosto sarakkeilla "Name", "Mac", "Row", "Column" skriptien kanssa samaan kansioon. Nimi kenttään voi laittaa myös IP-osoitteen.
+5. Luo välilyönnein erotettu "luokka.csv" tiedosto sarakkeilla "Name", "Mac", "Row", "Column" skriptien kanssa samaan kansioon.
 ```
 "Name" "Mac" "Column" "Row"
 "localhost" "A1:B2:C3:D4:E5:F6" "1" "1"
 "VKY00000" "A2:B3:C4:D5:E6:F7" "2" "1"
-"VKY00001" "A3:B4:C5:D6:E7:F8" "1" "2"
+"10.132.0.1" "A3:B4:C5:D6:E7:F8" "1" "2"
+"192.168.0.1" "A4:B6:C6:D7:E8:F9" "2" "2"
 ```
 
 6. Aja run-skripti:
