@@ -3,7 +3,6 @@
 class Host
 {
     # Keeps track of the hosts and performs actions on them
-
     static [Host[]]$Hosts = @()
     [String]$Name
     [String]$Mac
@@ -22,7 +21,8 @@ class Host
     static [void] Populate([String]$path, [String]$delimiter)
     {
         # Creates [Host] objects from given .csv file
-        Write-Host ("Populating from {0}" -f $path)
+        Write-Host -NoNewline "Populating from "
+        Write-Host -ForegroundColor Yellow $path
         [Host]::Hosts = @()
         Import-Csv $path -Delimiter $delimiter | ForEach-Object {
             $h = [Host]::new($_.Name, $_.Mac, [Int]$_.Column, [Int]$_.Row)
@@ -37,20 +37,22 @@ class Host
             if((Receive-Job $h.pingJob).StatusCode -eq 0){ $h.Status = $true } # else $false
             if(!$h.Mac) # Try to get missing mac-address if not populated from the file
             {
-                Write-Host -NoNewline -ForegroundColor Red ("Missing mac-address of {0}, " -f $h.Name)
+                Write-Host -NoNewline -ForegroundColor Red "Missing mac-address of "
+                Write-Host -NoNewline -ForegroundColor Gray $h.Name
                 if($h.Status)
                 {
-                    Write-Host -ForegroundColor Red "retrieving and saving to file"
+                    Write-Host -ForegroundColor Red ", retrieving and saving to file"
                     $needToExport = $true
                     $h.Mac = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $h.Name | Select-Object -First 1 -ExpandProperty MACAddress
                 }
                 else
                 {
-                    Write-Host -ForegroundColor Red "unable to connect to offline host!"
+                    Write-Host -ForegroundColor Red ", unable to connect to offline host!"
                 }
             }
             # Display populate status in console
-            Write-Host -NoNewline ("{0}: mac={1}, status=" -f $h.Name, $h.Mac)
+            Write-Host -NoNewline -ForegroundColor Gray $h.Name
+            Write-Host -NoNewline (": mac={0}, status=" -f $h.Mac)
             if($h.Status)
             {
                 $color = "Green"
@@ -92,7 +94,7 @@ class Host
             $cell = $script:table[($h.Column - 1), ($h.Row - 1)]
             $cell.Value = $h.Name
             $cell.Style.Font = [System.Drawing.Font]::new($cell.InheritedStyle.Font.FontFamily, 12, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
-            $cell.ToolTipText = $h.Mac
+            # $cell.ToolTipText = $h.Mac
             if($h.Status)
             {
                 $cell.Style.ForeColor = [System.Drawing.Color]::Green
@@ -160,7 +162,10 @@ class RemoteCommand : LocalCommand
     {
         $hostnames = [Host]::GetActive() 
         if ($null -eq $hostnames) { return }
-        Write-Host ("Running '{0}' on {1}" -f $this.Command, [String]$hostnames)
+        Write-Host -NoNewline "Running "
+        Write-Host -NoNewline -ForegroundColor Yellow $this.Command
+        Write-Host -NoNewline " on "
+        Write-Host -ForegroundColor Gray -Separator ", " $hostnames
         if($this.AsJob)
         {
             Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $this.Command -ArgumentList $this.Params -AsJob
@@ -177,13 +182,11 @@ class InteractiveCommand : LocalCommand
     # Runs specified program interactively on the active session of remote hosts (WinRM)
     [String]$Executable
     [String]$Argument
-    [String]$WorkingDirectory
 
-    InteractiveCommand([String]$name, [String]$executable, [String]$argument, [String]$workingDirectory) : base($name)
+    InteractiveCommand([String]$name, [String]$executable, [String]$argument) : base($name)
     {
         $this.Executable = $executable
         $this.Argument = $argument
-        $this.WorkingDirectory = $workingDirectory
     }
 
     [void] Run()
@@ -191,11 +194,20 @@ class InteractiveCommand : LocalCommand
         # Creates, runs and removes Windows scheduled task that runs specified program interactively on the locally logged on user
         $hostnames = [Host]::GetActive()
         if ($null -eq $hostnames) { return }
-        Write-Host ("Running {0}\{1} {2} on {3}" -f $this.WorkingDirectory, $this.Executable, $this.Argument, [String]$hostnames)
-        Invoke-Command -ComputerName $hostnames -Credential $script:credential -ArgumentList $this.Executable, $this.Argument, $this.WorkingDirectory -AsJob -ScriptBlock {
-            param($executable, $argument, $workingDirectory)
-            if($argument -eq ""){ $argument = " " } # There must be a better way to do this xd
-            $action = New-ScheduledTaskAction -Execute $executable -Argument $argument -WorkingDirectory $workingDirectory
+        Write-Host -NoNewline "Running "
+        Write-Host -NoNewline -ForegroundColor Yellow $this.Executable, $this.Argument
+        Write-Host -NoNewline " on "
+        Write-Host -ForegroundColor Gray -Separator ", " $hostnames
+        Invoke-Command -ComputerName $hostnames -Credential $script:credential -ArgumentList $this.Executable, $this.Argument -AsJob -ScriptBlock {
+            param($executable, $argument)
+            if($argument)
+            {
+                $action = New-ScheduledTaskAction -Execute $executable -Argument $argument
+            }
+            else
+            {
+                $action = New-ScheduledTaskAction -Execute $executable
+            }
             $user = Get-Process -Name "explorer" -IncludeUserName | Select-Object -First 1 -ExpandProperty UserName # Get the user that is logged on the remote computer
             $principal = New-ScheduledTaskPrincipal -UserId $user
             $task = New-ScheduledTask -Action $action -Principal $principal
@@ -247,7 +259,7 @@ class VBS3Command : InteractiveCommand
         "SC + AAR" = "simulationClient=2"
     }
 
-    VBS3Command([String]$name) : base($name, "VBS3_64.exe", "", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI")
+    VBS3Command([String]$name) : base($name, "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe", "")
     {
         $this.Form = [Form]::new()
         $this.Form.AutoSize = $true
@@ -374,176 +386,199 @@ class VBS3Command : InteractiveCommand
     }
 }
 
-class CopyCommand : LocalCommand
+# class OldCopyCommand : LocalCommand
+# {
+#     # Mirrors files from specified source to remote hosts in parallel (SMB)
+#     [String]$Source
+#     [String]$Destination
+#     [String]$Username
+#     [String]$Password
+
+#     OldCopyCommand([String]$name, [String]$source, [String]$destination, [String]$username, [String]$password) : base($name)
+#     {
+#         $this.Source = $source
+#         $this.Destination = $destination
+#         $this.Username = $username
+#         $this.Password = $password
+#     }
+
+#     [void] Run()
+#     {
+#         $hostnames = [Host]::GetActive()
+#         if ($null -eq $hostnames) { return }
+#         if($this.Username)
+#         {
+#             $u = $this.Username
+#             $p = $this.Password
+#             net.exe use $this.Source /user:$u $p
+#             if($LASTEXITCODE -ne 0){ return } # Check that the source is available and the credentials are accepted
+#         }
+#         else
+#         {
+#             if(!(Test-Path $this.Source))
+#             {
+#                 Write-Host ("Cannot find source: {0}" -f $this.Source)
+#                 return
+#             }    
+#         }
+#         $description = "Mirroring {0} to {1}" -f $this.Source, $this.Destination
+#         Write-Host $description
+#         Write-Progress -Activity $description -Status "Starting" -PercentComplete 0
+#         $sourceItems = Get-ChildItem $this.Source
+#         $jobs = @()
+#         $hostnames | ForEach-Object {
+#             $jobs += Start-Job -ArgumentList $_, $sourceItems, $this.Destination -ScriptBlock {
+#                 param(
+#                     [String]$hostname,
+#                     [Object[]]$sourceItems,
+#                     [String]$destination
+#                 )
+#                 $session = New-PSSession -ComputerName $hostname
+#                 $items = Invoke-Command -Session $session -ArgumentList $sourceItems, $destination -ScriptBlock {
+#                     param(
+#                         [Object[]]$sourceItems,
+#                         [String]$destination
+#                     )
+#                     $items = New-Object PsObject -Property @{New=@(); Newer=@(); Skip=@(); Remove=@()}
+#                     $sourceNames = @()
+#                     $sourceItems | ForEach-Object {
+#                         $sourceNames += $_.Name
+#                         if((Get-Item $destination).PSIsContainer)
+#                         {
+#                             $destinationItem = Join-Path -Path $destination -ChildPath $_.Name
+#                         }
+#                         else
+#                         {
+#                             $destinationItem = $destination    
+#                         }
+#                         if(Test-Path $destinationItem)
+#                         {
+#                             $sourceTime = $_.LastWriteTime
+#                             $destinationTime = (Get-Item $destinationItem).LastWriteTime
+#                             if($sourceTime -gt $destinationTime)
+#                             {
+#                                 $items.Newer += $_
+#                             }
+#                             else
+#                             {
+#                                 $items.Skip += $_
+#                             }
+#                         }
+#                         else
+#                         {
+#                             $items.New += $_
+#                         }
+#                     }
+#                     Get-ChildItem $destination | ForEach-Object {
+#                         if(!($sourceNames.Contains($_.Name)))
+#                         {
+#                             $items.Remove += $_
+#                             Remove-Item $_.FullName
+#                         }
+#                     }
+#                     return $items
+#                 }
+#                 $neededItems = $items.New + $items.Newer
+#                 $totalSize = ($neededItems | Measure-Object -Property Length -Sum).Sum
+#                 $processedSize = 0
+#                 $neededItems | ForEach-Object {
+#                     (100*$processedSize/$totalSize)
+#                     if((Get-Item $destination).PSIsContainer)
+#                     {
+#                         $destinationPath = Join-Path -Path $destination -ChildPath $_.Name
+#                     }
+#                     else
+#                     {
+#                         $destinationPath = $destination
+#                     }
+#                     Copy-Item $_.FullName -Destination $destinationPath -ToSession $session
+#                     $processedSize += $_.Length
+#                 }
+#                 $items | Add-Member @{Hostname=$hostname}
+#                 Remove-PSSession $session
+#                 $items
+#             }
+#         }
+#         $timer = [Timer]::new()
+#         $timer.Interval = 100
+#         $jobs | ForEach-Object {$_ | Add-Member @{P=0}}
+#         $timer | Add-Member @{Jobs=$jobs; CompletedJobs=@(); Username=$this.Username; Source=$this.Source; Description=$description} # Attach to the timer object so that they are accessible inside the event handler
+#         $timer.Add_Tick({
+#             $finished = $true
+#             $this.Jobs | Where-Object { !($this.CompletedJobs.Contains($_)) } | ForEach-Object {
+#                 $output = Receive-Job $_
+#                 if($_.State -ne "Completed")
+#                 {
+#                     $finished = $false
+#                     if($output)
+#                     {
+#                         if($output.GetType() -eq [System.Int32] -or $output.GetType() -eq [System.Double])
+#                         {
+#                             $_.P = $output
+#                         }
+#                     }
+#                 }
+#                 else
+#                 {
+#                     $_.P = 100
+#                     if($output)
+#                     {
+#                         Write-Host -NoNewline ("Completed {0}: " -f $output.Hostname)
+#                         Write-Host -NoNewline -ForegroundColor Green $output.New.Count
+#                         Write-Host -NoNewline " new file(s), "
+#                         Write-Host -NoNewline -ForegroundColor DarkGreen $output.Newer.Count
+#                         Write-Host -NoNewline " newer file(s), "
+#                         Write-Host -NoNewline -ForegroundColor Yellow $output.Skip.Count
+#                         Write-Host -NoNewline " skipped file(s), "
+#                         Write-Host -NoNewline -ForegroundColor Red $output.Remove.Count
+#                         Write-Host " removed file(s)"
+#                         $this.CompletedJobs += $_
+#                     }
+#                 }
+#             }
+#             if(!$finished)
+#             {
+#                 $average = ($this.Jobs | Measure-Object -Property P -Average).Average
+#                 Write-Progress -Activity $this.Description -Status "$average%" -PercentComplete $average
+#             }
+#             else
+#             {
+#                 $this.Jobs | Remove-Job
+#                 if($this.Username)
+#                 {
+#                     net.exe use /delete $this.Source
+#                 }
+#                 Write-Progress -Activity "Sync" -Status "Finished" -Completed
+#                 Write-Host "Finished"
+#                 $this.Dispose()
+#             }
+#         })
+#         $timer.Start()
+#     }
+# }
+# 
+class CopyCommand : InteractiveCommand
 {
-    # Mirrors files from specified source to remote hosts in parallel (SMB)
-    [String]$Source
-    [String]$Destination
-    [String]$Username
-    [String]$Password
+    CopyCommand([String]$name, [String]$source, [String]$destination, [String]$username, [String]$password, [String]$argument) : base($name, "C:\WINDOWS\System32\cmd.exe", $this.GetParameter($source, $destination, $username, $password, $argument)){}
 
-    CopyCommand([String]$name, [String]$source, [String]$destination, [String]$username, [String]$password) : base($name)
+    [String] GetParameter([String]$source, [String]$destination, [String]$username, [String]$password, [String]$argument)
     {
-        $this.Source = $source
-        $this.Destination = $destination
-        $this.Username = $username
-        $this.Password = $password
-    }
-
-    [void] Run()
-    {
-        if($this.Username)
+        if($username)
         {
-            $u = $this.Username
-            $p = $this.Password
-            net.exe use $this.Source /user:$u $p
-            if($LASTEXITCODE -ne 0){ return } # Check that the source is available and the credentials are accepted
+            return '/c net use "{0}" /user:{2} "{3}" && robocopy "{0}" "{1}" {4} & net use /delete "{0}" & timeout /t 10' -f $source, $destination, $username, $password, $argument
         }
         else
         {
-            if(!(Test-Path $this.Source))
-            {
-                Write-Host ("Cannot find source: {0}" -f $this.Source)
-                return
-            }    
+            return '/c robocopy "{0}" "{1}" {2} & timeout /t 10' -f $source, $destination, $argument
         }
-        Write-Host "Mirroring"
-        $sourceItems = Get-ChildItem $this.Source
-        $jobs = @()
-        [Host]::GetActive() | ForEach-Object {
-            $jobs += Start-Job -ArgumentList $_, $sourceItems, $this.Destination -ScriptBlock {
-                param(
-                    [String]$hostname,
-                    [Object[]]$sourceItems,
-                    [String]$destination
-                )
-                $session = New-PSSession -ComputerName $hostname
-                $items = Invoke-Command -Session $session -ArgumentList $sourceItems, $destination -ScriptBlock {
-                    param(
-                        [Object[]]$sourceItems,
-                        [String]$destination
-                    )
-                    $newItems = @()
-                    $newerItems = @()
-                    $skippedItems = @()
-                    $removedItems = @()
-                    $sourceNames = @()
-                    $sourceItems | ForEach-Object {
-                        $sourceNames += $_.Name
-                        if((Get-Item $destination).PSIsContainer)
-                        {
-                            $destinationItem = Join-Path -Path $destination -ChildPath $_.Name
-                        }
-                        else
-                        {
-                            $destinationItem = $destination    
-                        }
-                        if(Test-Path $destinationItem)
-                        {
-                            $sourceTime = $_.LastWriteTime
-                            $destinationTime = (Get-Item $destinationItem).LastWriteTime
-                            if($sourceTime -gt $destinationTime)
-                            {
-                                $newerItems += $_
-                            }
-                            else
-                            {
-                                $skippedItems += $_
-                            }
-                        }
-                        else
-                        {
-                            $newItems += $_
-                        }
-                    }
-                    Get-ChildItem $destination | ForEach-Object {
-                        if(!($sourceNames.Contains($_.Name)))
-                        {
-                            $removedItems += $_
-                            Remove-Item $_.FullName
-                        }
-                    }
-                    $items = New-Object PsObject -Property @{New=$newItems; Newer=$newerItems; Skip=$skippedItems; Remove=$removedItems}
-                    return $items
-                }
-                $neededItems = $items.New + $items.Newer
-                $totalSize = ($neededItems | Measure-Object -Property Length -Sum).Sum
-                $processedSize = 0
-                $neededItems | ForEach-Object {
-                    Write-Output (100*$processedSize/$totalSize)
-                    if((Get-Item $destination).PSIsContainer)
-                    {
-                        $destinationPath = Join-Path -Path $destination -ChildPath $_.Name
-                    }
-                    else
-                    {
-                        $destinationPath = $destination
-                    }
-                    Copy-Item $_.FullName -Destination $destinationPath -ToSession $session
-                    $processedSize += $_.Length
-                }
-                Remove-PSSession $session
-                $items | Add-Member @{Hostname=$hostname}
-                Write-Output $items
-            }
-        }
-        $timer = [Timer]::new()
-        $timer.Interval = 100
-        $jobs | ForEach-Object {$_ | Add-Member @{P=0}}
-        $timer | Add-Member @{Jobs=$jobs; Username=$this.Username; Source=$this.Source}
-        $timer.Add_Tick({
-            $finished = $true
-            $this.Jobs | ForEach-Object {
-                $output = Receive-Job $_
-                if($output -ne $null)
-                {
-                    if($output.GetType() -eq [System.Int32] -or $output.GetType() -eq [System.Double])
-                    {
-                        $_.P = $output
-                    }
-                    elseif($output.GetType() -eq [System.Management.Automation.PSCustomObject])
-                    {
-                        Write-Host -NoNewline ("Completed {0}: " -f $output.Hostname)
-                        Write-Host -NoNewline -ForegroundColor Green $output.New.Count
-                        Write-Host -NoNewline " new file(s), "
-                        Write-Host -NoNewline -ForegroundColor DarkGreen $output.Newer.Count
-                        Write-Host -NoNewline " newer file(s), "
-                        Write-Host -NoNewline -ForegroundColor Yellow $output.Skip.Count
-                        Write-Host -NoNewline " skipped file(s), "
-                        Write-Host -NoNewline -ForegroundColor Red $output.Remove.Count
-                        Write-Host " removed file(s)"
-                    }
-                }
-                if($_.State -ne "Completed")
-                {
-                    $finished = $false
-                }
-            }
-            if(!$finished)
-            {
-                $average = ($this.Jobs | Measure-Object -Property P -Average).Average
-                Write-Progress -Activity "Sync" -Status "Mirroring" -PercentComplete $average
-            }
-            else
-            {
-                $this.Jobs | Remove-Job
-                if($this.Username)
-                {
-                    net.exe use /delete $this.Source
-                }
-                Write-Progress -Activity "Sync" -Status "Finished" -Completed
-                Write-Host "Finished"
-                $this.Dispose()
-            }
-        })
-        $timer.Start()
     }
 }
 
 # Entry point of the program
 [Host]::Populate("$PSScriptRoot\luokka.csv", " ")
 $script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.15"
+$root.Text = "Luokanhallinta v0.16"
+$root.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($ENV:SystemRoot + "\System32\wksprt.exe")
 
 $script:table = [DataGridView]::new()
 $table.Dock = [DockStyle]::Fill
@@ -660,23 +695,24 @@ $commands = [ordered]@{
                 $UDPclient.Send($packet, 102) # Sends the magic packet
             }
         })
-        [InteractiveCommand]::new("Virus scan", "fsav.exe", "/disinf C: D: ", "C:\Program Files (x86)\F-Secure\Anti-Virus")
         [RemoteCommand]::new("Käynnistä uudelleen", $true, @(), {shutdown /r /t 10 /c 'Luokanhallinta on ajastanut uudelleen käynnistyksen'})
         [RemoteCommand]::new("Sammuta", $true, @(), {shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"})
     )
     "VBS3" = @(
         [VBS3Command]::new("Käynnistä...")
-        [CopyCommand]::new("Synkkaa addonit", "\\10.130.16.2\addons", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista")
-        [CopyCommand]::new("Synkkaa asetukset", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile", "", "")
-        [CopyCommand]::new("Synkkaa missionit", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions", "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions", "", "")
+        [CopyCommand]::new("Synkkaa addonit", "\\10.132.0.97\Addons", "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista", "/MIR /XO /NJH")
+        [CopyCommand]::new("Synkkaa asetukset", "\\$ENV:COMPUTERNAME\VBS3", "%userprofile%\Documents\VBS3", $(whoami), "", "$ENV:USERNAME.VBS3Profile /NJH")
+        [CopyCommand]::new("Synkkaa missionit", "\\$ENV:COMPUTERNAME\mpmissions", "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions", $(whoami), "", "/MIR /XO /NJH")
         [RemoteCommand]::new("Sulje", $true, @(), {Stop-Process -ProcessName VBS3_64})
     )
     "SteelBeasts" = @(
-        [InteractiveCommand]::new("Käynnistä", "SBPro64CM.exe", "", "C:\Program Files\eSim Games\SB Pro FI\Release")
+        [InteractiveCommand]::new("Käynnistä", "C:\Program Files\eSim Games\SB Pro FI\Release\SBPro64CM.exe", "")
         [RemoteCommand]::new("Sulje", $true, @(), {Stop-Process -ProcessName SBPro64CM})
     )
     "Muu" = @(
         [LocalCommand]::new("Päivitä", {[Host]::Populate("$PSScriptRoot\luokka.csv", " "); [Host]::Display()})
+        # [InteractiveCommand]::new("Virus scan?", "C:\Program Files (x86)\F-Secure\Anti-Virus\fsav.exe", "/spyware /system /all /disinf /beep C: D:")
+        # [InteractiveCommand]::new("Update F-Secure?", "C:\Program Files (x86)\F-Secure\FSGUI\postinstall.exe", "")
         [LocalCommand]::new("Vaihda käyttäjä...", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
         [LocalCommand]::new("Sulje", {$script:root.Close()})
     )
@@ -689,8 +725,18 @@ foreach($category in $commands.keys) # Iterates over command categories
     $menubar.Items.Add($menu) | Out-Null
     foreach($command in $commands[$category]) # Iterates over commands in each category
     {
-        # Add command to menu
-        $menu.DropDownItems.Add($command) | Out-Null
+        $menu.DropDownItems.Add($command) | Out-Null # Add command to menu
+    }
+}
+$shares = @{
+    "VBS3" = "$ENV:USERPROFILE\Documents\VBS3"
+    "mpmissions" = "$ENV:ProgramFiles\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions"
+}
+foreach($share in $shares.Keys)
+{
+    if(!(Get-SmbShare -Name $share -ErrorAction SilentlyContinue))
+    {
+        New-SmbShare -Name $share -Path $shares[$share] -Description "Luokanhallinta" | Out-Null
     }
 }
 
@@ -699,7 +745,8 @@ $password = ""
 # If default credentials are specified, use them instead of getting them from Get-Credential
 if($username)
 {
-    if($password){
+    if($password)
+    {
         $password = ConvertTo-SecureString $password -AsPlainText -Force
         $script:credential = [System.Management.Automation.PSCredential]::new($username, $password)
     }
@@ -713,3 +760,5 @@ else
     $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)
 }
 $root.showDialog() | Out-Null
+# After the root window has been closed
+$shares.Keys | ForEach-Object { Remove-SmbShare -Name $_ -Force }

@@ -39,7 +39,7 @@ Set-Item WSMan:\localhost\Client\TrustedHosts -value "10.132.0.*" # Esim.
 "192.168.0.1" "A4:B6:C6:D7:E8:F9" "2" "2"
 ```
 
-6. Aja run-skripti:
+6. Aja run-skripti järjestelmänvalvojana (Pikakuvakkeen luonti on järkevä idea):
 ```PowerShell
 .\run.ps1
 ```
