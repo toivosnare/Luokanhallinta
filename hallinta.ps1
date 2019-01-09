@@ -1,4 +1,7 @@
-﻿using namespace System.Windows.Forms
+﻿param(
+    [String]$path,
+    [Switch]$debug
+)
 
 class Host
 {
@@ -33,7 +36,7 @@ class Host
         $needToExport = $false
         foreach($h in [Host]::Hosts)
         {
-            $h.pingJob | Wait-Job # Wait for the ping to complete
+            $h.pingJob | Wait-Job # Wait for the first ping to complete
             if((Receive-Job $h.pingJob).StatusCode -eq 0){ $h.Status = $true } # else $false
             if(!$h.Mac) # Try to get missing mac-address if not populated from the file
             {
@@ -77,14 +80,14 @@ class Host
         $script:table.ColumnCount = ([Host]::Hosts | ForEach-Object {$_.Column} | Measure-Object -Maximum).Maximum
         $script:table.RowCount = ([Host]::Hosts | ForEach-Object {$_.Row} | Measure-Object -Maximum).Maximum
         $script:table.Columns | ForEach-Object {
-            $_.SortMode = [DataGridViewColumnSortMode]::NotSortable
+            $_.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::NotSortable
             $_.HeaderText = [Char]($_.Index + 65) # Sets the column headers to A, B, C...
-            $_.HeaderCell.Style.Alignment = [DataGridViewContentAlignment]::MiddleCenter
+            $_.HeaderCell.Style.Alignment = [System.Windows.Forms.DataGridViewContentAlignment]::MiddleCenter
             $_.Width = $cellSize
         }
         $script:table.Rows | ForEach-Object {
             $_.HeaderCell.Value = [String]($_.Index + 1) # Sets the row headers to 1, 2, 3...
-            $_.HeaderCell.Style.Alignment = [DataGridViewContentAlignment]::MiddleCenter
+            $_.HeaderCell.Style.Alignment = [System.Windows.Forms.DataGridViewContentAlignment]::MiddleCenter
             $_.Height = $cellSize
         }
         $script:root.MinimumSize = [System.Drawing.Size]::new(($cellSize * $script:table.ColumnCount + $script:table.RowHeadersWidth + 20), ($cellSize * $script:table.RowCount + $script:table.ColumnHeadersHeight + 65))
@@ -118,139 +121,18 @@ class Host
         # Returns the names of the hosts that are online and selected
         return ([Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name})
     }
-}
 
-class LocalCommand : ToolStripMenuItem
-{
-    # Basic command that runs specified script onclick
-    [Scriptblock]$Script
-
-    LocalCommand([String]$name, [Scriptblock]$script) : base($name)
+    static [String[]] GetMacs()
     {
-        $this.Script = $script
-    }
-
-    LocalCommand([String]$name) : base($name){}
-
-    [void] OnClick([System.EventArgs]$e)
-    {
-        ([ToolStripMenuItem]$this).OnClick($e)
-        $this.Run()
-    }
-
-    [void] Run()
-    {
-        & $this.Script
+        # Returns the mac addresses of selected hosts
+        return ([Host]::Hosts | Where-Object {($script:table[($_.Column - 1), ($_.Row - 1)]).Selected -and $_} | ForEach-Object {$_.Mac})
     }
 }
 
-class RemoteCommand : LocalCommand
-{
-    # Runs specified script on remote hosts (WinRM)
-    [Bool]$AsJob
-    [Object[]]$Params
-    [ScriptBlock]$Command
-
-    RemoteCommand([String]$name, [Bool]$asJob, [Object[]]$params, [ScriptBlock]$command) : base($name)
-    {
-        $this.AsJob = $asJob
-        $this.Params = $params
-        $this.Command = $command
-    }
-
-    [void] Run()
-    {
-        $hostnames = [Host]::GetActive() 
-        if ($null -eq $hostnames) { return }
-        Write-Host -NoNewline "Running "
-        Write-Host -NoNewline -ForegroundColor Yellow $this.Command
-        Write-Host -NoNewline " on "
-        Write-Host -ForegroundColor Gray -Separator ", " $hostnames
-        if($this.AsJob)
-        {
-            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $this.Command -ArgumentList $this.Params -AsJob
-        }
-        else
-        {
-            Invoke-Command -ComputerName $hostnames -Credential $script:credential -ScriptBlock $this.Command -ArgumentList $this.Params | Write-Host
-        }
-    }
-}
-
-class InteractiveCommand : LocalCommand
-{
-    # Runs specified program interactively on the active session of remote hosts (WinRM)
-    [String]$Executable
-    [String]$Argument
-
-    InteractiveCommand([String]$name, [String]$executable, [String]$argument) : base($name)
-    {
-        $this.Executable = $executable
-        $this.Argument = $argument
-    }
-
-    [void] Run()
-    {
-        # Creates, runs and removes Windows scheduled task that runs specified program interactively on the locally logged on user
-        $hostnames = [Host]::GetActive()
-        if ($null -eq $hostnames) { return }
-        Write-Host -NoNewline "Running "
-        Write-Host -NoNewline -ForegroundColor Yellow $this.Executable, $this.Argument
-        Write-Host -NoNewline " on "
-        Write-Host -ForegroundColor Gray -Separator ", " $hostnames
-        Invoke-Command -ComputerName $hostnames -Credential $script:credential -ArgumentList $this.Executable, $this.Argument -AsJob -ScriptBlock {
-            param($executable, $argument)
-            if($argument)
-            {
-                $action = New-ScheduledTaskAction -Execute $executable -Argument $argument
-            }
-            else
-            {
-                $action = New-ScheduledTaskAction -Execute $executable
-            }
-            $user = Get-Process -Name "explorer" -IncludeUserName | Select-Object -First 1 -ExpandProperty UserName # Get the user that is logged on the remote computer
-            $principal = New-ScheduledTaskPrincipal -UserId $user
-            $task = New-ScheduledTask -Action $action -Principal $principal
-            $taskname = "Luokanhallinta"
-            try 
-            {
-                $registeredTask = Get-ScheduledTask $taskname -ErrorAction SilentlyContinue
-            } 
-            catch 
-            {
-                $registeredTask = $null
-            }
-            if ($registeredTask)
-            {
-                Unregister-ScheduledTask -InputObject $registeredTask -Confirm:$false
-            }
-            $registeredTask = Register-ScheduledTask $taskname -InputObject $task
-            Start-ScheduledTask -InputObject $registeredTask
-            Unregister-ScheduledTask -InputObject $registeredTask -Confirm:$false
-        }
-    }
-}
-
-class VBS3Command : InteractiveCommand
+function StartVBS3Form
 {
     # Command with GUI to run VBS3 with specified startup parameters
-    [Form]$Form
-    [TableLayoutPanel]$Grid
-    [FlowLayoutPanel]$StatePanel
-    [CheckBox]$AdminCheckBox
-    [CheckBox]$MulticastCheckBox
-    [Label]$ConfigLabel
-    [TextBox]$ConfigTextBox
-    [Label]$ConnectLabel
-    [TextBox]$ConnectTextBox
-    [Label]$CpuCountLabel
-    [TextBox]$CpuCountTextBox
-    [Label]$ExThreadsLabel
-    [TextBox]$ExThreadsTextBox
-    [Label]$MaxMemLabel
-    [TextBox]$MaxMemTextBox
-    [Button]$RunButton
-    $States = [ordered]@{
+    $states = [ordered]@{
         "Kokonäyttö" = ""
         "Ikkuna" = "-window"
         "Palvelin" = "-server"
@@ -258,351 +140,291 @@ class VBS3Command : InteractiveCommand
         "After Action Review" = "simulationClient=1"
         "SC + AAR" = "simulationClient=2"
     }
+    $form = [System.Windows.Forms.Form]::new()
+    $form.AutoSize = $true
+    $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
+    $form.Text = "VBS3 - Käynnistä"
 
-    VBS3Command([String]$name) : base($name, "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe", "")
-    {
-        $this.Form = [Form]::new()
-        $this.Form.AutoSize = $true
-        $this.Form.FormBorderStyle = [FormBorderStyle]::FixedToolWindow
-        $this.Form.Text = $this.Text
+    $grid = [System.Windows.Forms.TableLayoutPanel]::new()
+    $grid.AutoSize = $true
+    $grid.ColumnCount = 2
+    $grid.Padding = [System.Windows.Forms.Padding]::new(10)
+    $grid.CellBorderStyle = [System.Windows.Forms.TableLayoutPanelCellBorderStyle]::Inset
 
-        $this.Grid = [TableLayoutPanel]::new()
-        $this.Grid.AutoSize = $true
-        $this.Grid.ColumnCount = 2
-        $this.Grid.Padding = [Padding]::new(10)
-        $this.Grid.CellBorderStyle = [TableLayoutPanelCellBorderStyle]::Inset
-
-        $this.StatePanel = [FlowLayoutPanel]::new()
-        $this.StatePanel.AutoSize = $true
-        $this.StatePanel.FlowDirection = [FlowDirection]::TopDown
-        $this.States.Keys | ForEach-Object {
-            $r = [RadioButton]::new()
-            $r.AutoSize = $true
-            $r.Margin = [Padding]::new(0)
-            $r.Text = $_
-            if($r.Text -eq "Kokonäyttö"){ $r.Checked = $true } 
-            $this.StatePanel.Controls.Add($r)
-        }
-        $this.Grid.SetCellPosition($this.StatePanel, [TableLayoutPanelCellPosition]::new(1, 0)) 
-        $this.Grid.Controls.Add($this.StatePanel)
-
-        $this.AdminCheckBox = [CheckBox]::new()
-        $this.AdminCheckBox.Text = "Admin"
-        $this.Grid.SetCellPosition($this.AdminCheckBox, [TableLayoutPanelCellPosition]::new(1, 1)) 
-        $this.Grid.Controls.Add($this.AdminCheckBox)
-
-        $this.MulticastCheckBox = [CheckBox]::new()
-        $this.MulticastCheckBox.Text = "Multicast"
-        $this.MulticastCheckBox.Checked = $true
-        $this.Grid.SetCellPosition($this.MulticastCheckBox, [TableLayoutPanelCellPosition]::new(1, 2)) 
-        $this.Grid.Controls.Add($this.MulticastCheckBox)
-
-        $this.ConfigLabel = [Label]::new()
-        $this.ConfigLabel.Text = "cfg="
-        $this.ConfigLabel.AutoSize = $true
-        $this.ConfigLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.ConfigLabel, [TableLayoutPanelCellPosition]::new(0, 3)) 
-        $this.Grid.Controls.Add($this.ConfigLabel)
-        $this.ConfigTextBox = [TextBox]::new()
-        $this.ConfigTextBox.Width = 200
-        $this.Grid.SetCellPosition($this.ConfigTextBox, [TableLayoutPanelCellPosition]::new(1, 3)) 
-        $this.Grid.Controls.Add($this.ConfigTextBox)
-
-        $this.ConnectLabel = [Label]::new()
-        $this.ConnectLabel.Text = "connect="
-        $this.ConnectLabel.AutoSize = $true
-        $this.ConnectLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.ConnectLabel, [TableLayoutPanelCellPosition]::new(0, 4)) 
-        $this.Grid.Controls.Add($this.ConnectLabel)
-        $this.ConnectTextBox = [TextBox]::new()
-        $this.ConnectTextBox.Width = 200
-        $this.Grid.SetCellPosition($this.ConnectTextBox, [TableLayoutPanelCellPosition]::new(1, 4)) 
-        $this.Grid.Controls.Add($this.ConnectTextBox)
-
-        $this.CpuCountLabel = [Label]::new()
-        $this.CpuCountLabel.Text = "cpuCount="
-        $this.CpuCountLabel.AutoSize = $true
-        $this.CpuCountLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.CpuCountLabel, [TableLayoutPanelCellPosition]::new(0, 5)) 
-        $this.Grid.Controls.Add($this.CpuCountLabel)
-        $this.CpuCountTextBox = [TextBox]::new()
-        $this.CpuCountTextBox.Width = 200
-        $this.Grid.SetCellPosition($this.CpuCountTextBox, [TableLayoutPanelCellPosition]::new(1, 5)) 
-        $this.Grid.Controls.Add($this.CpuCountTextBox)
-
-        $this.ExThreadsLabel = [Label]::new()
-        $this.ExThreadsLabel.Text = "exThreads="
-        $this.ExThreadsLabel.AutoSize = $true
-        $this.ExThreadsLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.ExThreadsLabel, [TableLayoutPanelCellPosition]::new(0, 6)) 
-        $this.Grid.Controls.Add($this.ExThreadsLabel)
-        $this.ExThreadsTextBox = [TextBox]::new()
-        $this.ExThreadsTextBox.Width = 200
-        $this.Grid.SetCellPosition($this.ExThreadsTextBox, [TableLayoutPanelCellPosition]::new(1, 6)) 
-        $this.Grid.Controls.Add($this.ExThreadsTextBox)
-
-        $this.MaxMemLabel = [Label]::new()
-        $this.MaxMemLabel.Text = "maxMem="
-        $this.MaxMemLabel.AutoSize = $true
-        $this.MaxMemLabel.Anchor = [AnchorStyles]::Right
-        $this.Grid.SetCellPosition($this.MaxMemLabel, [TableLayoutPanelCellPosition]::new(0, 7)) 
-        $this.Grid.Controls.Add($this.MaxMemLabel)
-        $this.MaxMemTextBox = [TextBox]::new()
-        $this.MaxMemTextBox.Width = 200
-        $this.Grid.SetCellPosition($this.MaxMemTextBox, [TableLayoutPanelCellPosition]::new(1, 7)) 
-        $this.Grid.Controls.Add($this.MaxMemTextBox)
-
-        $this.RunButton = [Button]::new()
-        $this.RunButton | Add-Member @{Command=$this} -PassThru -Force
-        $this.RunButton.Text = "Käynnistä"
-        $this.RunButton.Add_Click({$this.Command.Run()})
-        $this.RunButton.Dock = [DockStyle]::Bottom
-        $this.Form.AcceptButton = $this.RunButton
-        $this.Grid.SetCellPosition($this.RunButton, [TableLayoutPanelCellPosition]::new(0, 8))
-        $this.Grid.SetColumnSpan($this.RunButton, 2)
-        $this.Grid.Controls.Add($this.RunButton)
-        $this.Form.Controls.Add($this.Grid)
+    $statePanel = [System.Windows.Forms.FlowLayoutPanel]::new()
+    $statePanel.AutoSize = $true
+    $statePanel.FlowDirection = [System.Windows.Forms.FlowDirection]::TopDown
+    $states.Keys | ForEach-Object {
+        $r = [System.Windows.Forms.RadioButton]::new()
+        $r.AutoSize = $true
+        $r.Margin = [System.Windows.Forms.Padding]::new(0)
+        $r.Text = $_
+        if($r.Text -eq "Kokonäyttö"){ $r.Checked = $true } 
+        $statePanel.Controls.Add($r)
     }
+    $grid.SetCellPosition($statePanel, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(1, 0)) 
+    $grid.Controls.Add($statePanel)
 
-    [void] OnClick([System.EventArgs]$e)
-    {
-        ([ToolStripMenuItem]$this).OnClick($e)
-        $this.Form.ShowDialog()
-    }
+    $adminCheckBox = [System.Windows.Forms.CheckBox]::new()
+    $adminCheckBox.Text = "Admin"
+    $grid.SetCellPosition($adminCheckBox, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(1, 1)) 
+    $grid.Controls.Add($adminCheckBox)
 
-    [void] Run()
-    {
+    $multicastCheckBox = [System.Windows.Forms.CheckBox]::new()
+    $multicastCheckBox.Text = "Multicast"
+    $multicastCheckBox.Checked = $true
+    $grid.SetCellPosition($multicastCheckBox, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(1, 2)) 
+    $grid.Controls.Add($multicastCheckBox)
+
+    $configLabel = [System.Windows.Forms.Label]::new()
+    $configLabel.Text = "cfg="
+    $configLabel.AutoSize = $true
+    $configLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Right
+    $grid.SetCellPosition($configLabel, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(0, 3)) 
+    $grid.Controls.Add($configLabel)
+    $configTextBox = [System.Windows.Forms.TextBox]::new()
+    $configTextBox.Width = 200
+    $grid.SetCellPosition($configTextBox, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(1, 3)) 
+    $grid.Controls.Add($configTextBox)
+
+    $connectLabel = [System.Windows.Forms.Label]::new()
+    $connectLabel.Text = "connect="
+    $connectLabel.AutoSize = $true
+    $connectLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Right
+    $grid.SetCellPosition($connectLabel, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(0, 4)) 
+    $grid.Controls.Add($connectLabel)
+    $connectTextBox = [System.Windows.Forms.TextBox]::new()
+    $connectTextBox.Width = 200
+    $grid.SetCellPosition($connectTextBox, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(1, 4)) 
+    $grid.Controls.Add($connectTextBox)
+
+    $cpuCountLabel = [System.Windows.Forms.Label]::new()
+    $cpuCountLabel.Text = "cpuCount="
+    $cpuCountLabel.AutoSize = $true
+    $cpuCountLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Right
+    $grid.SetCellPosition($cpuCountLabel, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(0, 5)) 
+    $grid.Controls.Add($cpuCountLabel)
+    $cpuCountTextBox = [System.Windows.Forms.TextBox]::new()
+    $cpuCountTextBox.Width = 200
+    $grid.SetCellPosition($cpuCountTextBox, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(1, 5)) 
+    $grid.Controls.Add($cpuCountTextBox)
+
+    $exThreadsLabel = [System.Windows.Forms.Label]::new()
+    $exThreadsLabel.Text = "exThreads="
+    $exThreadsLabel.AutoSize = $true
+    $exThreadsLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Right
+    $grid.SetCellPosition($exThreadsLabel, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(0, 6)) 
+    $grid.Controls.Add($exThreadsLabel)
+    $exThreadsTextBox = [System.Windows.Forms.TextBox]::new()
+    $exThreadsTextBox.Width = 200
+    $grid.SetCellPosition($exThreadsTextBox, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(1, 6)) 
+    $grid.Controls.Add($exThreadsTextBox)
+
+    $maxMemLabel = [System.Windows.Forms.Label]::new()
+    $maxMemLabel.Text = "maxMem="
+    $maxMemLabel.AutoSize = $true
+    $maxMemLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Right
+    $grid.SetCellPosition($maxMemLabel, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(0, 7)) 
+    $grid.Controls.Add($maxMemLabel)
+    $maxMemTextBox = [System.Windows.Forms.TextBox]::new()
+    $maxMemTextBox.Width = 200
+    $grid.SetCellPosition($maxMemTextBox, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(1, 7)) 
+    $grid.Controls.Add($maxMemTextBox)
+
+    $parameterLabel = [System.Windows.Forms.Label]::new()
+    $parameterLabel.Text = "Muut parametrit:"
+    $parameterLabel.AutoSize = $true
+    $parameterLabel.Anchor = [System.Windows.Forms.AnchorStyles]::Right
+    $grid.SetCellPosition($parameterLabel, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(0, 8)) 
+    $grid.Controls.Add($parameterLabel)
+    $parameterTextBox = [System.Windows.Forms.TextBox]::new()
+    $parameterTextBox.Width = 200
+    $grid.SetCellPosition($parameterTextBox, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(1, 8)) 
+    $grid.Controls.Add($parameterTextBox)
+
+    $runButton = [System.Windows.Forms.Button]::new()
+    $runButton | Add-Member @{StatePanel=$statePanel; States=$states; AdminCheckbox=$adminCheckBox; MulticastCheckBox=$multicastCheckBox; ConfigTextBox=$configTextBox; ConnectTextBox=$connectTextBox; CpuCountTextBox=$cpuCountTextBox; ExThreadsTextBox=$exThreadsTextBox; MaxMemTextBox=$maxMemTextBox; ParameterTextBox=$parameterTextBox; Form=$form} -PassThru -Force
+    $runButton.Text = "Käynnistä"
+    $runButton.Add_Click({
         $state = $this.StatePanel.Controls | Where-Object {$_.Checked} | Select-Object -ExpandProperty Text
-        $this.Argument = $this.States[$state]
-        if($this.AdminCheckbox.Checked){ $this.Argument = ("-admin {0}" -f $this.Argument)}
-        if(!$this.MulticastCheckBox.Checked){ $this.Argument = ("-multicast=0 {0}" -f $this.Argument)}
-        if($this.ConfigTextBox.Text){ $this.Argument = ("cfg={0} {1}" -f $this.ConfigTextBox.Text, $this.Argument)}
-        if($this.ConnectTextBox.Text){ $this.Argument = ("connect={0} {1}" -f $this.ConnectTextBox.Text, $this.Argument)}
-        if($this.CpuCountTextBox.Text){ $this.Argument = ("cpuCount={0} {1}" -f $this.CpuCountTextBox.Text, $this.Argument)}
-        if($this.ExThreadsTextBox.Text){ $this.Argument = ("exThreads={0} {1}" -f $this.ExThreadsTextBox.Text, $this.Argument)}
-        if($this.MaxMemTextBox.Text){ $this.Argument = ("maxMem={0} {1}" -f $this.MaxMemTextBox.Text, $this.Argument)}
-        ([InteractiveCommand]$this).Run()
+        $argument = $this.States[$state]
+        if($this.AdminCheckbox.Checked){ $argument = ("{0} -admin" -f $argument)}
+        if(!$this.MulticastCheckBox.Checked){ $argument = ("{0} -multicast=0" -f $argument)}
+        if($this.ConfigTextBox.Text){ $argument = ("{0} -cfg={1}" -f $argument, $this.ConfigTextBox.Text)}
+        if($this.ConnectTextBox.Text){ $argument = ("{0} -connect={1}" -f $argument, $this.ConnectTextBox.Text)}
+        if($this.CpuCountTextBox.Text){ $argument = ("{0} -cpuCount={1}" -f $argument, $this.CpuCountTextBox.Text)}
+        if($this.ExThreadsTextBox.Text){ $argument = ("{0} -exThreads={1}" -f $argument, $this.ExThreadsTextBox.Text)}
+        if($this.MaxMemTextBox.Text){ $argument = ("{0} -maxMem={1}" -f $argument, $this.MaxMemTextBox.Text)}
+        if($this.ParameterTextBox.Text){ $argument = ("{0} {1}") -f $argument, $this.ParameterTextBox.Text }
+        Start-ProgramOnTarget -target ([Host]::GetActive()) -executable "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe" -argument $argument
         $this.Form.Close()
+    })
+    $runButton.Dock = [System.Windows.Forms.DockStyle]::Bottom
+    $form.AcceptButton = $runButton
+    $grid.SetCellPosition($runButton, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(0, 9))
+    $grid.SetColumnSpan($runButton, 2)
+    $grid.Controls.Add($runButton)
+    $form.Controls.Add($grid)
+    $this | Add-Member @{StartVBS3Form=$form} -PassThru -Force
+}
+
+function Invoke-CommandOnTarget([String[]]$target, [Scriptblock]$command, [Object]$params = @(), [Bool]$asJob = $true, [Bool]$output = $true)
+{
+    if(!$target){ return }
+    if($output)
+    {
+        Write-Host -NoNewline "Running "
+        Write-Host -NoNewline -ForegroundColor Yellow $command
+        Write-Host -NoNewline " on "
+        Write-Host -ForegroundColor Gray -Separator ", " $target
+    }
+    if($asJob)
+    {
+        Invoke-Command -ComputerName $target -Credential $script:credential -ScriptBlock $command -ArgumentList $params -AsJob
+    }
+    else
+    {
+        Invoke-Command -ComputerName $target -Credential $script:credential -ScriptBlock $command -ArgumentList $params | Write-Host
     }
 }
 
-# class OldCopyCommand : LocalCommand
-# {
-#     # Mirrors files from specified source to remote hosts in parallel (SMB)
-#     [String]$Source
-#     [String]$Destination
-#     [String]$Username
-#     [String]$Password
-
-#     OldCopyCommand([String]$name, [String]$source, [String]$destination, [String]$username, [String]$password) : base($name)
-#     {
-#         $this.Source = $source
-#         $this.Destination = $destination
-#         $this.Username = $username
-#         $this.Password = $password
-#     }
-
-#     [void] Run()
-#     {
-#         $hostnames = [Host]::GetActive()
-#         if ($null -eq $hostnames) { return }
-#         if($this.Username)
-#         {
-#             $u = $this.Username
-#             $p = $this.Password
-#             net.exe use $this.Source /user:$u $p
-#             if($LASTEXITCODE -ne 0){ return } # Check that the source is available and the credentials are accepted
-#         }
-#         else
-#         {
-#             if(!(Test-Path $this.Source))
-#             {
-#                 Write-Host ("Cannot find source: {0}" -f $this.Source)
-#                 return
-#             }    
-#         }
-#         $description = "Mirroring {0} to {1}" -f $this.Source, $this.Destination
-#         Write-Host $description
-#         Write-Progress -Activity $description -Status "Starting" -PercentComplete 0
-#         $sourceItems = Get-ChildItem $this.Source
-#         $jobs = @()
-#         $hostnames | ForEach-Object {
-#             $jobs += Start-Job -ArgumentList $_, $sourceItems, $this.Destination -ScriptBlock {
-#                 param(
-#                     [String]$hostname,
-#                     [Object[]]$sourceItems,
-#                     [String]$destination
-#                 )
-#                 $session = New-PSSession -ComputerName $hostname
-#                 $items = Invoke-Command -Session $session -ArgumentList $sourceItems, $destination -ScriptBlock {
-#                     param(
-#                         [Object[]]$sourceItems,
-#                         [String]$destination
-#                     )
-#                     $items = New-Object PsObject -Property @{New=@(); Newer=@(); Skip=@(); Remove=@()}
-#                     $sourceNames = @()
-#                     $sourceItems | ForEach-Object {
-#                         $sourceNames += $_.Name
-#                         if((Get-Item $destination).PSIsContainer)
-#                         {
-#                             $destinationItem = Join-Path -Path $destination -ChildPath $_.Name
-#                         }
-#                         else
-#                         {
-#                             $destinationItem = $destination    
-#                         }
-#                         if(Test-Path $destinationItem)
-#                         {
-#                             $sourceTime = $_.LastWriteTime
-#                             $destinationTime = (Get-Item $destinationItem).LastWriteTime
-#                             if($sourceTime -gt $destinationTime)
-#                             {
-#                                 $items.Newer += $_
-#                             }
-#                             else
-#                             {
-#                                 $items.Skip += $_
-#                             }
-#                         }
-#                         else
-#                         {
-#                             $items.New += $_
-#                         }
-#                     }
-#                     Get-ChildItem $destination | ForEach-Object {
-#                         if(!($sourceNames.Contains($_.Name)))
-#                         {
-#                             $items.Remove += $_
-#                             Remove-Item $_.FullName
-#                         }
-#                     }
-#                     return $items
-#                 }
-#                 $neededItems = $items.New + $items.Newer
-#                 $totalSize = ($neededItems | Measure-Object -Property Length -Sum).Sum
-#                 $processedSize = 0
-#                 $neededItems | ForEach-Object {
-#                     (100*$processedSize/$totalSize)
-#                     if((Get-Item $destination).PSIsContainer)
-#                     {
-#                         $destinationPath = Join-Path -Path $destination -ChildPath $_.Name
-#                     }
-#                     else
-#                     {
-#                         $destinationPath = $destination
-#                     }
-#                     Copy-Item $_.FullName -Destination $destinationPath -ToSession $session
-#                     $processedSize += $_.Length
-#                 }
-#                 $items | Add-Member @{Hostname=$hostname}
-#                 Remove-PSSession $session
-#                 $items
-#             }
-#         }
-#         $timer = [Timer]::new()
-#         $timer.Interval = 100
-#         $jobs | ForEach-Object {$_ | Add-Member @{P=0}}
-#         $timer | Add-Member @{Jobs=$jobs; CompletedJobs=@(); Username=$this.Username; Source=$this.Source; Description=$description} # Attach to the timer object so that they are accessible inside the event handler
-#         $timer.Add_Tick({
-#             $finished = $true
-#             $this.Jobs | Where-Object { !($this.CompletedJobs.Contains($_)) } | ForEach-Object {
-#                 $output = Receive-Job $_
-#                 if($_.State -ne "Completed")
-#                 {
-#                     $finished = $false
-#                     if($output)
-#                     {
-#                         if($output.GetType() -eq [System.Int32] -or $output.GetType() -eq [System.Double])
-#                         {
-#                             $_.P = $output
-#                         }
-#                     }
-#                 }
-#                 else
-#                 {
-#                     $_.P = 100
-#                     if($output)
-#                     {
-#                         Write-Host -NoNewline ("Completed {0}: " -f $output.Hostname)
-#                         Write-Host -NoNewline -ForegroundColor Green $output.New.Count
-#                         Write-Host -NoNewline " new file(s), "
-#                         Write-Host -NoNewline -ForegroundColor DarkGreen $output.Newer.Count
-#                         Write-Host -NoNewline " newer file(s), "
-#                         Write-Host -NoNewline -ForegroundColor Yellow $output.Skip.Count
-#                         Write-Host -NoNewline " skipped file(s), "
-#                         Write-Host -NoNewline -ForegroundColor Red $output.Remove.Count
-#                         Write-Host " removed file(s)"
-#                         $this.CompletedJobs += $_
-#                     }
-#                 }
-#             }
-#             if(!$finished)
-#             {
-#                 $average = ($this.Jobs | Measure-Object -Property P -Average).Average
-#                 Write-Progress -Activity $this.Description -Status "$average%" -PercentComplete $average
-#             }
-#             else
-#             {
-#                 $this.Jobs | Remove-Job
-#                 if($this.Username)
-#                 {
-#                     net.exe use /delete $this.Source
-#                 }
-#                 Write-Progress -Activity "Sync" -Status "Finished" -Completed
-#                 Write-Host "Finished"
-#                 $this.Dispose()
-#             }
-#         })
-#         $timer.Start()
-#     }
-# }
-# 
-class CopyCommand : InteractiveCommand
+function Start-ProgramOnTarget([String[]]$target, [String]$executable, [String]$argument, [Bool]$output = $true)
 {
-    CopyCommand([String]$name, [String]$source, [String]$destination, [String]$username, [String]$password, [String]$argument) : base($name, "C:\WINDOWS\System32\cmd.exe", $this.GetParameter($source, $destination, $username, $password, $argument)){}
-
-    [String] GetParameter([String]$source, [String]$destination, [String]$username, [String]$password, [String]$argument)
+    if(!$target){ return }
+    if($output)
     {
-        if($username)
+        Write-Host -NoNewline "Running "
+        Write-Host -NoNewline -ForegroundColor Yellow $executable, $argument
+        Write-Host -NoNewline " on "
+        Write-Host -ForegroundColor Gray -Separator ", " $target
+    }
+    Invoke-Command -ComputerName $target -Credential $script:credential -ArgumentList $executable, $argument -AsJob -ScriptBlock {
+        param($executable, $argument)
+        if($argument)
         {
-            return '/c net use "{0}" /user:{2} "{3}" && robocopy "{0}" "{1}" {4} & net use /delete "{0}" & timeout /t 10' -f $source, $destination, $username, $password, $argument
+            $action = New-ScheduledTaskAction -Execute $executable -Argument $argument
         }
         else
         {
-            return '/c robocopy "{0}" "{1}" {2} & timeout /t 10' -f $source, $destination, $argument
+            $action = New-ScheduledTaskAction -Execute $executable
         }
+        $user = Get-Process -Name "explorer" -IncludeUserName | Select-Object -First 1 -ExpandProperty UserName # Get the user that is logged on the remote computer
+        $principal = New-ScheduledTaskPrincipal -UserId $user
+        $task = New-ScheduledTask -Action $action -Principal $principal
+        $taskname = "Luokanhallinta"
+        try 
+        {
+            $registeredTask = Get-ScheduledTask $taskname -ErrorAction SilentlyContinue
+        } 
+        catch 
+        {
+            $registeredTask = $null
+        }
+        if ($registeredTask)
+        {
+            Unregister-ScheduledTask -InputObject $registeredTask -Confirm:$false
+        }
+        $registeredTask = Register-ScheduledTask $taskname -InputObject $task
+        Start-ScheduledTask -InputObject $registeredTask
+        Unregister-ScheduledTask -InputObject $registeredTask -Confirm:$false
+    }
+}
+
+function Start-Target([String[]]$target, [Int]$port)
+{
+    # Boots selected remote hosts by broadcasting the magic packet (Wake-On-LAN)
+    $broadcast = [Net.IPAddress]::Parse("255.255.255.255")
+    foreach($mac in $target)
+    {
+        $mac = (($mac.replace(":", "")).replace("-", "")).replace(".", "")
+        $target = 0, 2, 4, 6, 8, 10 | ForEach-Object {[Convert]::ToByte($mac.substring($_, 2), 16)}
+        $packet = (,[Byte]255 * 6) + ($target * 16) # Creates the magic packet
+        $UDPclient = [System.Net.Sockets.UdpClient]::new()
+        $UDPclient.Connect($broadcast, $port)
+        $UDPclient.Send($packet, 102) # Sends the magic packet
+    }
+}
+
+function Copy-ItemToTarget([String[]]$target, [String]$source, [String]$destination, [String]$username = "", [String]$password = "", [String]$parameter = "", [Bool]$output = $true)
+{
+    if($output)
+    {
+        Write-Host -NoNewline "Copying from "
+        Write-Host -NoNewline -ForegroundColor Yellow $source
+        Write-Host -NoNewline " to "
+        Write-Host -NoNewline -ForegroundColor Yellow $destination
+        if($parameter){ Write-Host -NoNewline (" ({0})" -f $parameter) }
+        Write-Host -NoNewline " on "
+        Write-Host -ForegroundColor Gray -Separator ", " $target
+    }
+    if($username)
+    {
+        $argument = '/c net use "{0}" /user:{2} "{3}" && robocopy "{0}" "{1}" {4} & net use /delete "{0}" & timeout /t 10' -f $source, $destination, $username, $password, $parameter
+    }
+    else
+    {
+        $argument = '/c robocopy "{0}" "{1}" {2} & timeout /t 10' -f $source, $destination, $parameter
+    }
+    Start-ProgramOnTarget -target $target -executable "C:\WINDOWS\System32\cmd.exe" -argument $argument -output $false
+}
+
+function New-TempShare([String]$name, [String]$path)
+{
+    if(!(Get-SmbShare -Name $name -ErrorAction SilentlyContinue))
+    {
+        New-SmbShare -Name $name -Path $path -Description "Luokanhallinta" | Out-Null
+    }
+}
+
+function Set-ScriptCredential([String]$username = "", [String]$password = "")
+{
+    if($username)
+    {
+        if($password)
+        {
+            $password = ConvertTo-SecureString $password -AsPlainText -Force
+            $script:credential = [System.Management.Automation.PSCredential]::new($username, $password)
+        }
+        else
+        {
+            $script:credential = [System.Management.Automation.PSCredential]::new($username)
+        }
+    }
+    else
+    {
+        $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)
     }
 }
 
 # Entry point of the program
-[Host]::Populate("$PSScriptRoot\luokka.csv", " ")
-$script:root = [Form]::new()
-$root.Text = "Luokanhallinta v0.16"
-$root.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($ENV:SystemRoot + "\System32\wksprt.exe")
+[Host]::Populate($path, " ")
+$script:root = [System.Windows.Forms.Form]::new()
+$root.Text = "Luokanhallinta v0.17"
+$root.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($ENV:SYSTEMROOT + "\System32\wksprt.exe")
 
-$script:table = [DataGridView]::new()
-$table.Dock = [DockStyle]::Fill
+$script:table = [System.Windows.Forms.DataGridView]::new()
+$table.Dock = [System.Windows.Forms.DockStyle]::Fill
 $table.AllowUserToAddRows = $false
 $table.AllowUserToDeleteRows = $false
 $table.AllowUserToResizeColumns = $false
 $table.AllowUserToResizeRows = $false
 $table.AllowUserToOrderColumns = $false
 $table.ReadOnly = $true
-$table.ColumnHeadersHeightSizeMode = [DataGridViewColumnHeadersHeightSizeMode]::DisableResizing
+$table.ColumnHeadersHeightSizeMode = [System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode]::DisableResizing
 $table.ColumnHeadersHeight = 20
-$table.RowHeadersWidthSizeMode = [DataGridViewRowHeadersWidthSizeMode]::DisableResizing
+$table.RowHeadersWidthSizeMode = [System.Windows.Forms.DataGridViewRowHeadersWidthSizeMode]::DisableResizing
 $table.RowHeadersWidth = 20
 ($table.RowsDefaultCellStyle).ForeColor = [System.Drawing.Color]::Red
 ($table.RowsDefaultCellStyle).SelectionForeColor = [System.Drawing.Color]::Red
 ($table.RowsDefaultCellStyle).SelectionBackColor = [System.Drawing.Color]::LightGray
-($table.RowsDefaultCellStyle).Alignment = [DataGridViewContentAlignment]::MiddleCenter
-$table.SelectionMode = [DataGridViewSelectionMode]::CellSelect
+($table.RowsDefaultCellStyle).Alignment = [System.Windows.Forms.DataGridViewContentAlignment]::MiddleCenter
+$table.SelectionMode = [System.Windows.Forms.DataGridViewSelectionMode]::CellSelect
 $root.Controls.Add($table)
 [Host]::Display()
 
-# Following event handlers implement various ways of making a selection (aamuja)
-$table.Add_KeyDown({if($_.KeyCode -eq [Keys]::ControlKey){ $script:control = $true }})
-$table.Add_KeyUp({if($_.KeyCode -eq [Keys]::ControlKey){ $script:control = $false }})
+# Following event handlers implement various ways of making a selection
+$table.Add_KeyDown({if($_.KeyCode -eq [System.Windows.Forms.Keys]::ControlKey){ $script:control = $true }})
+$table.Add_KeyUp({if($_.KeyCode -eq [System.Windows.Forms.Keys]::ControlKey){ $script:control = $false }})
 $table.Add_CellMouseDown({
     if($_.RowIndex -eq -1 -and $_.ColumnIndex -ne -1)
     {
@@ -625,11 +447,11 @@ $table.Add_CellMouseUp({
         {
             for($r = 0; $r -lt $this.RowCount; $r++)
             {
-                if($_.Button -eq [MouseButtons]::Left)
+                if($_.Button -eq [System.Windows.Forms.MouseButtons]::Left)
                 {
                     $this[[Int]$c, [Int]$r].Selected = $true
                 }
-                elseif($_.Button -eq [MouseButtons]::Right)
+                elseif($_.Button -eq [System.Windows.Forms.MouseButtons]::Right)
                 {
                     $this[[Int]$c, [Int]$r].Selected = $false
                 }
@@ -643,20 +465,20 @@ $table.Add_CellMouseUp({
         $max = [Math]::Max($script:startRow, $endRow)
         for($r = $min; $r -le $max; $r++)
         {
-            for($c = 0; $c -lt $this.ColumnCount; $c++)
+            for($aamut = 0; $aamut -lt $this.ColumnCount; $aamut++)
             {
-                if($_.Button -eq [MouseButtons]::Left)
+                if($_.Button -eq [System.Windows.Forms.MouseButtons]::Left)
                 {
-                    $this[[Int]$c, [Int]$r].Selected = $true
+                    $this[[Int]$aamut, [Int]$r].Selected = $true
                 }
-                elseif($_.Button -eq [MouseButtons]::Right)
+                elseif($_.Button -eq [System.Windows.Forms.MouseButtons]::Right)
                 {
-                    $this[[Int]$c, [Int]$r].Selected = $false
+                    $this[[Int]$aamut, [Int]$r].Selected = $false
                 }
             }
         }
     }
-    elseif($_.Button -eq [MouseButtons]::Right)
+    elseif($_.Button -eq [System.Windows.Forms.MouseButtons]::Right)
     {
         if($_.ColumnIndex -ne -1 -and $_.RowIndex -ne -1)
         {
@@ -669,96 +491,67 @@ $table.Add_CellMouseUp({
     }
 })
 
-$menubar = [MenuStrip]::new()
+$menubar = [System.Windows.Forms.MenuStrip]::new()
 $root.MainMenuStrip = $menubar
-$menubar.Dock = [DockStyle]::Top
+$menubar.Dock = [System.Windows.Forms.DockStyle]::Top
 $root.Controls.Add($menubar)
 $commands = [ordered]@{
     "Valitse" = @(
-        [LocalCommand]::new("Kaikki", {$script:table.SelectAll()}),
-        [LocalCommand]::new("Käänteinen", {$script:table.Rows | ForEach-Object {$_.Cells | ForEach-Object { $_.Selected = !$_.Selected }}})
-        [LocalCommand]::new("Ei mitään", {$script:table.ClearSelection()})
+        @{Name="Kaikki"; Click={$script:table.SelectAll()}; Shortcut=[System.Windows.Forms.Shortcut]::CtrlA}
+        @{Name="Käänteinen"; Click={$script:table.Rows | ForEach-Object {$_.Cells | ForEach-Object { $_.Selected = !$_.Selected }}}}
+        @{Name="Ei mitään"; Click={$script:table.ClearSelection()}; Shortcut=[System.Windows.Forms.Shortcut]::CtrlD}
     )
     "Tietokone" = @(
-        [LocalCommand]::new("Käynnistä", {
-            # Boots selected remote hosts by broadcasting the magic packet (Wake-On-LAN)
-            $macs = [Host]::Hosts | Where-Object {($script:table[($_.Column - 1), ($_.Row - 1)]).Selected -and $_} | ForEach-Object {$_.Mac} # Get mac addresses of selected hosts
-            $port = 9
-            $broadcast = [Net.IPAddress]::Parse("255.255.255.255")
-            foreach($m in $macs)
-            {
-                $m = (($m.replace(":", "")).replace("-", "")).replace(".", "")
-                $target = 0, 2, 4, 6, 8, 10 | ForEach-Object {[convert]::ToByte($m.substring($_, 2), 16)}
-                $packet = (,[byte]255 * 6) + ($target * 16) # Creates the magic packet
-                $UDPclient = [System.Net.Sockets.UdpClient]::new()
-                $UDPclient.Connect($broadcast, $port)
-                $UDPclient.Send($packet, 102) # Sends the magic packet
-            }
-        })
-        [RemoteCommand]::new("Käynnistä uudelleen", $true, @(), {shutdown /r /t 10 /c 'Luokanhallinta on ajastanut uudelleen käynnistyksen'})
-        [RemoteCommand]::new("Sammuta", $true, @(), {shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"})
+        @{Name="Käynnistä"; Click={Start-Target -target ([Host]::GetMacs()) -port 9}}
+        @{Name="Käynnistä uudelleen"; Click={Invoke-CommandOnTarget -target ([Host]::GetActive()) -command {shutdown /r /t 10 /c 'Luokanhallinta on ajastanut uudelleen käynnistyksen'}}}
+        @{Name="Sammuta"; Click={Invoke-CommandOnTarget -target ([Host]::GetActive()) -command {shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"}}}
     )
     "VBS3" = @(
-        [VBS3Command]::new("Käynnistä...")
-        [CopyCommand]::new("Synkkaa addonit", "\\10.132.0.97\Addons", "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons", "WORKGROUP\Admin", "kuusteista", "/MIR /XO /NJH")
-        [CopyCommand]::new("Synkkaa asetukset", "\\$ENV:COMPUTERNAME\VBS3", "%userprofile%\Documents\VBS3", $(whoami), "", "$ENV:USERNAME.VBS3Profile /NJH")
-        [CopyCommand]::new("Synkkaa missionit", "\\$ENV:COMPUTERNAME\mpmissions", "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions", $(whoami), "", "/MIR /XO /NJH")
-        [RemoteCommand]::new("Sulje", $true, @(), {Stop-Process -ProcessName VBS3_64})
+        # @{Name="Käynnistä"; Click={Run-RemoteProgram -target ([Host]::GetActive()) -executable "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe" -argument "-window"}}
+        @{Name="Käynnistä"; Init={StartVBS3Form}; Click={$script:root.StartVBS3Form.ShowDialog()}}
+        @{Name="Synkaa addonit"; Click={Copy-ItemToTarget -target ([Host]::GetActive()) -source "\\10.132.0.97\Addons" -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" -username "WORKGROUP\testi" -password "pleasedonotuse" -parameter "/MIR /XO /NJH"}}
+        @{Name="Synkaa asetukset";
+            Init={New-TempShare -name "VBS3" -path "$ENV:USERPROFILE\Documents\VBS3"};
+            Click={Copy-ItemToTarget -target ([Host]::GetActive()) -source "\\$ENV:COMPUTERNAME\VBS3" -destination "%userprofile%\Documents\VBS3" -username $(whoami.exe) -parameter "$ENV:USERNAME.VBS3Profile VBS3.cfg /NJH"}
+            Exit={Remove-SmbShare -Name "VBS3" -Force}
+        }
+        @{Name="Synkaa missionit";
+            Init={New-TempShare -name "mpmissions" -path "$ENV:PROGRAMFILES\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions"};
+            Click={Copy-ItemToTarget -target ([Host]::GetActive()) -source "\\$ENV:COMPUTERNAME\mpmissions" -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions" -username $(whoami.exe) -parameter "/MIR /XO /NJH"}
+            Exit={Remove-SmbShare -Name "mpmissions" -Force}
+        }
+        @{Name="Sulje"; Click={Invoke-CommandOnTarget -target ([Host]::GetActive()) -command {Stop-Process -ProcessName VBS3_64}}}
     )
     "SteelBeasts" = @(
-        [InteractiveCommand]::new("Käynnistä", "C:\Program Files\eSim Games\SB Pro FI\Release\SBPro64CM.exe", "")
-        [RemoteCommand]::new("Sulje", $true, @(), {Stop-Process -ProcessName SBPro64CM})
+        @{Name="Käynnistä"; Click={Start-ProgramOnTarget -target ([Host]::GetActive()) -executable "C:\Program Files\eSim Games\SB Pro FI\Release\SBPro64CM.exe"}}
+        @{Name="Sulje"; Click={Invoke-CommandOnTarget -target ([Host]::GetActive()) -command {Stop-Process -ProcessName SBPro64CM}}}
     )
     "Muu" = @(
-        [LocalCommand]::new("Päivitä", {[Host]::Populate("$PSScriptRoot\luokka.csv", " "); [Host]::Display()})
-        # [InteractiveCommand]::new("Virus scan?", "C:\Program Files (x86)\F-Secure\Anti-Virus\fsav.exe", "/spyware /system /all /disinf /beep C: D:")
-        # [InteractiveCommand]::new("Update F-Secure?", "C:\Program Files (x86)\F-Secure\FSGUI\postinstall.exe", "")
-        [LocalCommand]::new("Vaihda käyttäjä...", {$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)})
-        [LocalCommand]::new("Sulje", {$script:root.Close()})
+        @{Name="Päivitä"; Click={[Host]::Populate($path, " "); [Host]::Display()}; Shortcut=[System.Windows.Forms.Keys]::F5}
+        @{Name="Vaihda käyttäjä"; Init={Set-ScriptCredential -username $(whoami) -password ""}; Click={Set-ScriptCredential}}
+        @{Name="Sulje"; Click={$script:root.Close()}; Shortcut=[System.Windows.Forms.Shortcut]::AltF4}
     )
-} 
-foreach($category in $commands.keys) # Iterates over command categories
+}
+if($debug)
 {
-    # Create a menu for each category
-    $menu = [ToolStripMenuItem]::new()
-    $menu.Text = $category
+    $commands.Add("Debug", @(
+        @{Name="F-Secure Virus Scan"; Click={Start-ProgramOnTarget -target ([Host]::GetActive()) -executable "C:\Program Files (x86)\F-Secure\Anti-Virus\fsav.exe" -argument "/spyware /system /all /disinf /beep C: D:"}}
+        @{Name="Aja..."; Click={Invoke-CommandOnTarget -target ([Host]::GetActive()) -command ([Scriptblock]::Create((Read-Host -Prompt "command"))) -asJob $false}}
+        @{Name="Aja..."; Click={Start-ProgramOnTarget -target ([Host]::GetActive()) -executable (Read-Host -Prompt "executable") -argument (Read-Host -Prompt "argument")}}
+    ))
+}
+foreach($category in $commands.Keys)
+{
+    $menu = [System.Windows.Forms.ToolStripMenuItem]::new($category)
+    foreach($command in $commands[$category])
+    {
+        $item = [System.Windows.Forms.ToolStripMenuItem]::new($command.Name)
+        if($command.Init){ $root.Add_Load($command.Init) }
+        $item.Add_Click($command.Click)
+        if($command.Exit){ $root.Add_Closing($command.Exit) }
+        if($command.Shortcut){ $item.ShortcutKeys = $command.Shortcut }
+        $menu.DropDownItems.Add($item) | Out-Null
+    }
     $menubar.Items.Add($menu) | Out-Null
-    foreach($command in $commands[$category]) # Iterates over commands in each category
-    {
-        $menu.DropDownItems.Add($command) | Out-Null # Add command to menu
-    }
-}
-$shares = @{
-    "VBS3" = "$ENV:USERPROFILE\Documents\VBS3"
-    "mpmissions" = "$ENV:ProgramFiles\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions"
-}
-foreach($share in $shares.Keys)
-{
-    if(!(Get-SmbShare -Name $share -ErrorAction SilentlyContinue))
-    {
-        New-SmbShare -Name $share -Path $shares[$share] -Description "Luokanhallinta" | Out-Null
-    }
-}
-
-$username = $(whoami)
-$password = ""
-# If default credentials are specified, use them instead of getting them from Get-Credential
-if($username)
-{
-    if($password)
-    {
-        $password = ConvertTo-SecureString $password -AsPlainText -Force
-        $script:credential = [System.Management.Automation.PSCredential]::new($username, $password)
-    }
-    else
-    {
-        $script:credential = [System.Management.Automation.PSCredential]::new($username)
-    }
-}
-else
-{
-    $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)
 }
 $root.showDialog() | Out-Null
-# After the root window has been closed
-$shares.Keys | ForEach-Object { Remove-SmbShare -Name $_ -Force }
