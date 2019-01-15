@@ -1,11 +1,6 @@
-﻿param(
-    [String]$path,
-    [Switch]$debug
-)
-
-class Host
+﻿class Host
 {
-    # Keeps track of the hosts and performs actions on them
+    # Keeps track of hosts
     static [Host[]]$Hosts = @()
     [String]$Name
     [String]$Mac
@@ -96,7 +91,6 @@ class Host
         {
             $cell = $script:table[($h.Column - 1), ($h.Row - 1)]
             $cell.Value = $h.Name
-            $cell.Style.Font = [System.Drawing.Font]::new($cell.InheritedStyle.Font.FontFamily, 12, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
             # $cell.ToolTipText = $h.Mac
             if($h.Status)
             {
@@ -268,8 +262,9 @@ function StartVBS3Form
     $this | Add-Member @{StartVBS3Form=$form} -PassThru -Force
 }
 
-function Invoke-CommandOnTarget([String[]]$target, [Scriptblock]$command, [Object]$params = @(), [Bool]$asJob = $true, [Bool]$output = $true)
+function Invoke-CommandOnTarget([String[]]$target, [Scriptblock]$command, [Bool]$asJob = $true, [Bool]$output = $true)
 {
+    if(!$target){ $target = [Host]::GetActive() }
     if(!$target){ return }
     if($output)
     {
@@ -280,26 +275,28 @@ function Invoke-CommandOnTarget([String[]]$target, [Scriptblock]$command, [Objec
     }
     if($asJob)
     {
-        Invoke-Command -ComputerName $target -Credential $script:credential -ScriptBlock $command -ArgumentList $params -AsJob
+        Invoke-Command -ComputerName $target -Credential $script:credential -ScriptBlock $command -AsJob
     }
     else
     {
-        Invoke-Command -ComputerName $target -Credential $script:credential -ScriptBlock $command -ArgumentList $params | Write-Host
+        Invoke-Command -ComputerName $target -Credential $script:credential -ScriptBlock $command | Write-Host
     }
 }
 
-function Start-ProgramOnTarget([String[]]$target, [String]$executable, [String]$argument, [Bool]$output = $true)
+function Start-ProgramOnTarget([String[]]$target, [String]$executable, [String]$argument, [Switch]$runElevated, [Bool]$output = $true)
 {
+    if(!$target){ $target = [Host]::GetActive() }
     if(!$target){ return }
     if($output)
     {
-        Write-Host -NoNewline "Running "
+        Write-Host -NoNewline "Starting "
         Write-Host -NoNewline -ForegroundColor Yellow $executable, $argument
+        if($runElevated){ Write-Host -NoNewline " as administrator"}
         Write-Host -NoNewline " on "
         Write-Host -ForegroundColor Gray -Separator ", " $target
     }
-    Invoke-Command -ComputerName $target -Credential $script:credential -ArgumentList $executable, $argument -AsJob -ScriptBlock {
-        param($executable, $argument)
+    Invoke-Command -ComputerName $target -Credential $script:credential -ArgumentList $executable, $argument, $runElevated -AsJob -ScriptBlock {
+        param($executable, $argument, $runElevated)
         if($argument)
         {
             $action = New-ScheduledTaskAction -Execute $executable -Argument $argument
@@ -309,7 +306,14 @@ function Start-ProgramOnTarget([String[]]$target, [String]$executable, [String]$
             $action = New-ScheduledTaskAction -Execute $executable
         }
         $user = Get-Process -Name "explorer" -IncludeUserName | Select-Object -First 1 -ExpandProperty UserName # Get the user that is logged on the remote computer
-        $principal = New-ScheduledTaskPrincipal -UserId $user
+        if($runElevated)
+        {
+            $principal = New-ScheduledTaskPrincipal -UserId $user -RunLevel Highest
+        }
+        else
+        {
+            $principal = New-ScheduledTaskPrincipal -UserId $user
+        }
         $task = New-ScheduledTask -Action $action -Principal $principal
         $taskname = "Luokanhallinta"
         try 
@@ -333,26 +337,40 @@ function Start-ProgramOnTarget([String[]]$target, [String]$executable, [String]$
 function Start-Target([String[]]$target, [Int]$port)
 {
     # Boots selected remote hosts by broadcasting the magic packet (Wake-On-LAN)
+    if(!$target){ $target = [Host]::GetMacs() }
+    if(!$target){ return }
+    Write-Host -NoNewline "Starting "
+    Write-Host -ForegroundColor Yellow -Separator ", " $target
     $broadcast = [Net.IPAddress]::Parse("255.255.255.255")
     foreach($mac in $target)
     {
-        $mac = (($mac.replace(":", "")).replace("-", "")).replace(".", "")
-        $target = 0, 2, 4, 6, 8, 10 | ForEach-Object {[Convert]::ToByte($mac.substring($_, 2), 16)}
-        $packet = (,[Byte]255 * 6) + ($target * 16) # Creates the magic packet
-        $UDPclient = [System.Net.Sockets.UdpClient]::new()
-        $UDPclient.Connect($broadcast, $port)
-        $UDPclient.Send($packet, 102) # Sends the magic packet
+        if($mac)
+        {
+            $mac = (($mac.replace(":", "")).replace("-", "")).replace(".", "")
+            $target = 0, 2, 4, 6, 8, 10 | ForEach-Object {[Convert]::ToByte($mac.substring($_, 2), 16)}
+            $packet = (,[Byte]255 * 6) + ($target * 16) # Creates the magic packet
+            $UDPclient = [System.Net.Sockets.UdpClient]::new()
+            $UDPclient.Connect($broadcast, $port)
+            $UDPclient.Send($packet, 102) # Sends the magic packet
+        }
+        else
+        {
+            Write-Host -ForegroundColor Red "Missing mac"
+        }
     }
 }
 
-function Copy-ItemToTarget([String[]]$target, [String]$source, [String]$destination, [String]$username = "", [String]$password = "", [String]$parameter = "", [Bool]$output = $true)
+function Copy-ItemToTarget([String[]]$target, [String]$source, [String]$destination, [String]$username = "", [String]$password = "", [String]$parameter = "", [Switch]$runElevated, [Bool]$output = $true)
 {
+    if(!$target){ $target = [Host]::GetActive() }
+    if(!$target){ return }
     if($output)
     {
         Write-Host -NoNewline "Copying from "
         Write-Host -NoNewline -ForegroundColor Yellow $source
         Write-Host -NoNewline " to "
         Write-Host -NoNewline -ForegroundColor Yellow $destination
+        if($runElevated){ Write-Host -NoNewline " as administrator"}
         if($parameter){ Write-Host -NoNewline (" ({0})" -f $parameter) }
         Write-Host -NoNewline " on "
         Write-Host -ForegroundColor Gray -Separator ", " $target
@@ -365,15 +383,7 @@ function Copy-ItemToTarget([String[]]$target, [String]$source, [String]$destinat
     {
         $argument = '/c robocopy "{0}" "{1}" {2} & timeout /t 10' -f $source, $destination, $parameter
     }
-    Start-ProgramOnTarget -target $target -executable "C:\WINDOWS\System32\cmd.exe" -argument $argument -output $false
-}
-
-function New-TempShare([String]$name, [String]$path)
-{
-    if(!(Get-SmbShare -Name $name -ErrorAction SilentlyContinue))
-    {
-        New-SmbShare -Name $name -Path $path -Description "Luokanhallinta" | Out-Null
-    }
+    Start-ProgramOnTarget -target $target -executable "C:\WINDOWS\System32\cmd.exe" -argument $argument -runElevated:$runElevated -output $false
 }
 
 function Set-ScriptCredential([String]$username = "", [String]$password = "")
@@ -392,14 +402,30 @@ function Set-ScriptCredential([String]$username = "", [String]$password = "")
     }
     else
     {
-        $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami)
+        $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami.exe)
     }
 }
 
 # Entry point of the program
-[Host]::Populate($path, " ")
+if(!$classFilePath)
+{
+    $dialog = [System.Windows.Forms.OpenFileDialog]::new()
+    $dialog.InitialDirectory = $PSScriptRoot
+    $dialog.Title = "Valitse luokkatiedosto"
+    $dialog.Filter = "Luokkatiedostot (*.csv)|*.csv"
+    if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)
+    {
+        $classFilePath = $dialog.FileName
+    }
+    else
+    {
+        exit
+    }
+}
+[Host]::Populate($classFilePath, " ")
+Set-ScriptCredential -username $username -password $password
 $script:root = [System.Windows.Forms.Form]::new()
-$root.Text = "Luokanhallinta v0.17"
+$root.Text = "Luokanhallinta v0.18"
 $root.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($ENV:SYSTEMROOT + "\System32\wksprt.exe")
 
 $script:table = [System.Windows.Forms.DataGridView]::new()
@@ -414,8 +440,7 @@ $table.ColumnHeadersHeightSizeMode = [System.Windows.Forms.DataGridViewColumnHea
 $table.ColumnHeadersHeight = 20
 $table.RowHeadersWidthSizeMode = [System.Windows.Forms.DataGridViewRowHeadersWidthSizeMode]::DisableResizing
 $table.RowHeadersWidth = 20
-($table.RowsDefaultCellStyle).ForeColor = [System.Drawing.Color]::Red
-($table.RowsDefaultCellStyle).SelectionForeColor = [System.Drawing.Color]::Red
+($table.RowsDefaultCellStyle).Font = [System.Drawing.Font]::new("Microsoft Sans Serif", 12, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
 ($table.RowsDefaultCellStyle).SelectionBackColor = [System.Drawing.Color]::LightGray
 ($table.RowsDefaultCellStyle).Alignment = [System.Windows.Forms.DataGridViewContentAlignment]::MiddleCenter
 $table.SelectionMode = [System.Windows.Forms.DataGridViewSelectionMode]::CellSelect
@@ -492,9 +517,7 @@ $table.Add_CellMouseUp({
 })
 
 $menubar = [System.Windows.Forms.MenuStrip]::new()
-$root.MainMenuStrip = $menubar
 $menubar.Dock = [System.Windows.Forms.DockStyle]::Top
-$root.Controls.Add($menubar)
 $commands = [ordered]@{
     "Valitse" = @(
         @{Name="Kaikki"; Click={$script:table.SelectAll()}; Shortcut=[System.Windows.Forms.Shortcut]::CtrlA}
@@ -502,42 +525,48 @@ $commands = [ordered]@{
         @{Name="Ei mitään"; Click={$script:table.ClearSelection()}; Shortcut=[System.Windows.Forms.Shortcut]::CtrlD}
     )
     "Tietokone" = @(
-        @{Name="Käynnistä"; Click={Start-Target -target ([Host]::GetMacs()) -port 9}}
+        @{Name="Käynnistä"; Click={Start-Target -port 9}}
         @{Name="Käynnistä uudelleen"; Click={Invoke-CommandOnTarget -target ([Host]::GetActive()) -command {shutdown /r /t 10 /c 'Luokanhallinta on ajastanut uudelleen käynnistyksen'}}}
-        @{Name="Sammuta"; Click={Invoke-CommandOnTarget -target ([Host]::GetActive()) -command {shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"}}}
+        @{Name="Sammuta"; Click={Invoke-CommandOnTarget -command {shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"}}}
     )
     "VBS3" = @(
-        # @{Name="Käynnistä"; Click={Run-RemoteProgram -target ([Host]::GetActive()) -executable "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe" -argument "-window"}}
-        @{Name="Käynnistä"; Init={StartVBS3Form}; Click={$script:root.StartVBS3Form.ShowDialog()}}
-        @{Name="Synkaa addonit"; Click={Copy-ItemToTarget -target ([Host]::GetActive()) -source "\\10.132.0.97\Addons" -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" -username "WORKGROUP\testi" -password "pleasedonotuse" -parameter "/MIR /XO /NJH"}}
+        @{Name="Käynnistä..."; Init={StartVBS3Form}; Click={$script:root.StartVBS3Form.ShowDialog()}}
+        @{Name="Synkaa addonit"; Click={Copy-ItemToTarget -source $addonSyncPath -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" -username $addonSyncUsername -password $addonSyncPassword -parameter "/MIR /XO /NJH"}}
         @{Name="Synkaa asetukset";
-            Init={New-TempShare -name "VBS3" -path "$ENV:USERPROFILE\Documents\VBS3"};
-            Click={Copy-ItemToTarget -target ([Host]::GetActive()) -source "\\$ENV:COMPUTERNAME\VBS3" -destination "%userprofile%\Documents\VBS3" -username $(whoami.exe) -parameter "$ENV:USERNAME.VBS3Profile VBS3.cfg /NJH"}
+            Init={New-SmbShare -Name "VBS3" -Path "$ENV:USERPROFILE\Documents\VBS3" -Description "Luokanhallinta" | Out-Null};
+            Click={Copy-ItemToTarget -source "\\$ENV:COMPUTERNAME\VBS3" -destination "%userprofile%\Documents\VBS3" -username $(whoami.exe) -parameter "$ENV:USERNAME.VBS3Profile VBS3.cfg /NJH"}
             Exit={Remove-SmbShare -Name "VBS3" -Force}
         }
         @{Name="Synkaa missionit";
-            Init={New-TempShare -name "mpmissions" -path "$ENV:PROGRAMFILES\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions"};
-            Click={Copy-ItemToTarget -target ([Host]::GetActive()) -source "\\$ENV:COMPUTERNAME\mpmissions" -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions" -username $(whoami.exe) -parameter "/MIR /XO /NJH"}
+            Init={New-SmbShare -Name "mpmissions" -Path "$ENV:PROGRAMFILES\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions" -Description "Luokanhallinta" | Out-Null};
+            Click={Copy-ItemToTarget -source "\\$ENV:COMPUTERNAME\mpmissions" -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions" -username $(whoami.exe) -parameter "/MIR /XO /NJH"}
             Exit={Remove-SmbShare -Name "mpmissions" -Force}
         }
-        @{Name="Sulje"; Click={Invoke-CommandOnTarget -target ([Host]::GetActive()) -command {Stop-Process -ProcessName VBS3_64}}}
+        @{Name="Sulje"; Click={Invoke-CommandOnTarget -command {Stop-Process -ProcessName VBS3_64}}}
     )
     "SteelBeasts" = @(
-        @{Name="Käynnistä"; Click={Start-ProgramOnTarget -target ([Host]::GetActive()) -executable "C:\Program Files\eSim Games\SB Pro FI\Release\SBPro64CM.exe"}}
-        @{Name="Sulje"; Click={Invoke-CommandOnTarget -target ([Host]::GetActive()) -command {Stop-Process -ProcessName SBPro64CM}}}
-    )
-    "Muu" = @(
-        @{Name="Päivitä"; Click={[Host]::Populate($path, " "); [Host]::Display()}; Shortcut=[System.Windows.Forms.Keys]::F5}
-        @{Name="Vaihda käyttäjä"; Init={Set-ScriptCredential -username $(whoami) -password ""}; Click={Set-ScriptCredential}}
-        @{Name="Sulje"; Click={$script:root.Close()}; Shortcut=[System.Windows.Forms.Shortcut]::AltF4}
+        @{Name="Käynnistä"; Click={Start-ProgramOnTarget -executable "C:\Program Files\eSim Games\SB Pro FI\Release\SBPro64CM.exe"}}
+        @{Name="Sulje"; Click={Invoke-CommandOnTarget -command {Stop-Process -ProcessName SBPro64CM}}}
     )
 }
+if(Test-Path "${ENV:ProgramFiles(x86)}\F-Secure") # Add F-Secure commands if F-Secure is installed
+{
+    $commands.Add("F-Secure", @(
+        @{Name="Skannaa"; Click={Start-ProgramOnTarget -executable "C:\WINDOWS\System32\cmd.exe" -argument '/c "C:\Program Files (x86)\F-Secure\Anti-Virus\fsav.exe" /spyware /system /all /disinf /beep C: D: & pause' -runElevated}}
+        @{Name="Päivitä"; Click={Start-ProgramOnTarget -executable "C:\WINDOWS\System32\cmd.exe" -argument '/c "C:\Program Files (x86)\F-Secure\fsdbupdate9.exe" & pause' -runElevated}}
+    ))
+}
+$commands.Add("Muu", @(
+    @{Name="Päivitä"; Click={[Host]::Populate($classFilePath, " "); [Host]::Display()}; Shortcut=[System.Windows.Forms.Keys]::F5}
+    @{Name="Vaihda käyttäjä"; Click={Set-ScriptCredential}}
+    @{Name="Sulje"; Click={$script:root.Close()}; Shortcut=[System.Windows.Forms.Shortcut]::AltF4}
+))
 if($debug)
 {
     $commands.Add("Debug", @(
-        @{Name="F-Secure Virus Scan"; Click={Start-ProgramOnTarget -target ([Host]::GetActive()) -executable "C:\Program Files (x86)\F-Secure\Anti-Virus\fsav.exe" -argument "/spyware /system /all /disinf /beep C: D:"}}
-        @{Name="Aja..."; Click={Invoke-CommandOnTarget -target ([Host]::GetActive()) -command ([Scriptblock]::Create((Read-Host -Prompt "command"))) -asJob $false}}
-        @{Name="Aja..."; Click={Start-ProgramOnTarget -target ([Host]::GetActive()) -executable (Read-Host -Prompt "executable") -argument (Read-Host -Prompt "argument")}}
+        @{Name="Aja..."; Click={Invoke-CommandOnTarget -command ([Scriptblock]::Create((Read-Host -Prompt "command"))) -asJob $false}}
+        @{Name="Aja..."; Click={Start-ProgramOnTarget -executable (Read-Host -Prompt "executable") -argument (Read-Host -Prompt "argument")}}
+        @{Name="Kopioi..."; Click={Copy-ItemToTarget -source (Read-Host -Prompt "source") -destination (Read-Host -Prompt "destination") -username (Read-Host -Prompt "username") -password (Read-Host -Prompt "password") -parameter (Read-Host -Prompt "parameter") -runElevated}}
     ))
 }
 foreach($category in $commands.Keys)
@@ -554,4 +583,6 @@ foreach($category in $commands.Keys)
     }
     $menubar.Items.Add($menu) | Out-Null
 }
+$root.MainMenuStrip = $menubar
+$root.Controls.Add($menubar)
 $root.showDialog() | Out-Null

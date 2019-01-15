@@ -30,7 +30,7 @@ sc.exe config "WinRM" start=auto
 ```PowerShell
 Set-Item WSMan:\localhost\Client\TrustedHosts -value "10.132.0.*" # Esim.
 ```
-5. Luo välilyönnein erotettu "luokka.csv" tiedosto sarakkeilla "Name", "Mac", "Row", "Column" skriptien kanssa samaan kansioon.
+5. Luo välilyönnein erotettu luokkatiedosto sarakkeilla "Name", "Mac", "Row", "Column".
 ```
 "Name" "Mac" "Column" "Row"
 "localhost" "A1:B2:C3:D4:E5:F6" "1" "1"
@@ -38,15 +38,15 @@ Set-Item WSMan:\localhost\Client\TrustedHosts -value "10.132.0.*" # Esim.
 "10.132.0.1" "A3:B4:C5:D6:E7:F8" "1" "2"
 "192.168.0.1" "A4:B6:C6:D7:E8:F9" "2" "2"
 ```
-6. Korjaa hallinta.ps1-skriptin asetuket:
-    - Esimerkiksi rivillä 512 määritellään addon synkkauksen lähdekansio ja sinne pääsyyn käytettävät käyttäjätunnukset. Jos addonit synkataan Panssariprikaatin nassilta, älä käytä oletus "testi" käyttäjää vaan vaihda ne oman joukko-osastosi tunnuksiin. Jos sellaisia ei ole, pyydä ne Parolasta. Jos lähdekansioon ei tarvitse käyttäjätunnuksia, username ja password parametreja ei tarvitse määritellä.
-    ```PowerShell
-    @{Name="Synkaa addonit"; Click={Copy-ItemToTarget -target ([Host]::GetActive()) -source "\\10.132.0.97\Addons" -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" -username "WORKGROUP\testi" -password "pleasedonotuse" -parameter "/MIR /XO /NJH"}}
-    ```
-    - Rivillä 531 määritellään käyttäjätunnukset, jolla luokanhallintaa käytetään. Määrittele Init komennon parametreiksi sellaiset käyttäjätunnukset, joilla on järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin. $(whoami) hakee hallintakoneelle kirjautuneen käyttäjänimen automaattisesti, joka on toimiva ratkaisu jos kaikilla luokan koneilla on vastaavan niminen järjestelmänvalvojakäyttäjä.
-    ```PowerShell
-    @{Name="Vaihda käyttäjä"; Init={Set-ScriptCredential -username $(whoami) -password ""}; Click={Set-ScriptCredential}}
-    ```
+6. Avaa run.ps1 tiedosto tekstieditorissa. Laita $classFilePath muuttujan arvoksi luomasi luokkatiedoston polku (jos luokkatiedostoa ei määritellä erikseen, ohjelma pyytää käyttäjää määrittelemään sen käynnistyksen yhteydessä). Määritä myös $username ja $password muuttujilla käyttäjätunnukset, joilla etäkomennot ajetaan (jos käyttäjätunnuksia ei määritellä erikseen, ohjelma pyytää käyttäjää määrittelemään ne käynnistyksen yhteydessä). Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallitaviin tietokoneisiin. Lisäksi $addonSyncPath muuttujaan tulee polku, josta addonit synkataan. Seuraavat $addonSyncUsername ja $addonSyncPassword muuttujat voi jättää tyhjäksi jos addon lähdekansioon ei tarvitse käyttäjätunnuksia (eli se on jaettu kaikille).
+```PowerShell
+$classFilePath = "C:\Users\Uzer\Documents\Luokanhallinta\luokka.csv"
+$username = $(whoami.exe) # Gets username of currently logged on user
+$password = ""
+$addonSyncPath = "\\10.132.0.97\Addons"
+$addonSyncUsername = ""
+$addonSyncPassword = ""
+```
 7. Aja run-skripti järjestelmänvalvojana (pikakuvakkeen luonti on järkevä idea):
 ```PowerShell
 .\run.ps1
@@ -56,11 +56,12 @@ Set-Item WSMan:\localhost\Client\TrustedHosts -value "10.132.0.*" # Esim.
 pls fix
 ```
 
-## Pikakuvakkeen luonti ja käynnistysparametrit
-Jotta luokanhallinnan saa käynnistettyä järjestelmänvalvojan oikeuksilla, tulee pikakuvake luoda run-skriptin sijaan powershell.exeen. Pikakuvakkeen target kenttään tulee siis kirjoittaa "powershell C:\path\to\run.ps1 -path C:\path\to\class.csv". Target kentän loppuun kannataa lisätä käynnistyparametri "-path", joka tarkoittaa luokkatiedoston sijaintia. Jos luokkatiedostoa ei ole erikseen määritelty, ohjelma yrittää lukea run-skriptin kansiossa olevaa tiedostoa "luokka.csv". Viimeiseksi valitse pikakuvakkeen asetuksien "Shortcut" välilehdeltä "Advanced" ja varmista että "Run as administrator" on valittuna.
+## Pikakuvakkeen luonti
+Jotta luokanhallinnan saa käynnistettyä järjestelmänvalvojan oikeuksilla, tulee pikakuvake luoda run-skriptin sijaan powershell.exeen. Pikakuvakkeen target kenttään tulee siis kirjoittaa "powershell C:\path\to\run.ps1". Paina pikakuvakkeen ominaisuuksien "Shortcut" välilehdeltä "Advanced" ja varmista että "Run as administrator" on valittuna.
 
 ## Huomautuksia
 * Käyttäjätunnuksilla, joilla käytetään luokanhallintaa tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin, jotta etäkomentojen ajaminen onnistuu.
 * Luokanhallinta pitää käynnistää run.ps1 skriptin kautta.
 * Luokanhallinta ei toimi, jos hallittavan tietokoneen salasana on vanhentunut.
 * Jos luokanhallinta on ollut käyttämättömänä auki pitemmän ajan, kannattaa se käynnistää uudestaan tai vähintääkin päivittää painamalla F5.
+* F-Securen automaattinen päivitys tarvitsee toimiakseen päivitystyökalun (fsdbupdate9.exe), jonka voi ladata F-Securen nettisivuilta (https://www.f-secure.com/en/web/labs_global/database-updates). Sijoita tiedosto F-Securen juurikansioon (C:\Program Files (x86)\F-Secure).
