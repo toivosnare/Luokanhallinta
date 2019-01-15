@@ -386,26 +386,6 @@ function Copy-ItemToTarget([String[]]$target, [String]$source, [String]$destinat
     Start-ProgramOnTarget -target $target -executable "C:\WINDOWS\System32\cmd.exe" -argument $argument -runElevated:$runElevated -output $false
 }
 
-function Set-ScriptCredential([String]$username = "", [String]$password = "")
-{
-    if($username)
-    {
-        if($password)
-        {
-            $password = ConvertTo-SecureString $password -AsPlainText -Force
-            $script:credential = [System.Management.Automation.PSCredential]::new($username, $password)
-        }
-        else
-        {
-            $script:credential = [System.Management.Automation.PSCredential]::new($username)
-        }
-    }
-    else
-    {
-        $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami.exe)
-    }
-}
-
 # Entry point of the program
 if(!$classFilePath)
 {
@@ -423,7 +403,22 @@ if(!$classFilePath)
     }
 }
 [Host]::Populate($classFilePath, " ")
-Set-ScriptCredential -username $username -password $password
+if($username)
+{
+    if($password)
+    {
+        $password = ConvertTo-SecureString $password -AsPlainText -Force
+        $script:credential = [System.Management.Automation.PSCredential]::new($username, $password)
+    }
+    else
+    {
+        $script:credential = [System.Management.Automation.PSCredential]::new($username)
+    }
+}
+else
+{
+    $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami.exe)
+}
 $script:root = [System.Windows.Forms.Form]::new()
 $root.Text = "Luokanhallinta v0.18"
 $root.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($ENV:SYSTEMROOT + "\System32\wksprt.exe")
@@ -558,7 +553,7 @@ if(Test-Path "${ENV:ProgramFiles(x86)}\F-Secure") # Add F-Secure commands if F-S
 }
 $commands.Add("Muu", @(
     @{Name="Päivitä"; Click={[Host]::Populate($classFilePath, " "); [Host]::Display()}; Shortcut=[System.Windows.Forms.Keys]::F5}
-    @{Name="Vaihda käyttäjä"; Click={Set-ScriptCredential}}
+    @{Name="Vaihda käyttäjä"; Click={$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami.exe)}}
     @{Name="Sulje"; Click={$script:root.Close()}; Shortcut=[System.Windows.Forms.Shortcut]::AltF4}
 ))
 if($debug)

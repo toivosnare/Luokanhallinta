@@ -1,4 +1,4 @@
-![screenshot](/uploads/654cd95f47988ac1d6febd0ac5aa856d/screenshot.png)
+![screenshot2](/uploads/c7cd3deb16e02fd2ba0b3df62560684f/screenshot2.png)
 
 # Luokanhallinta
 
