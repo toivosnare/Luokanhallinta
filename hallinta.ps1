@@ -37,7 +37,7 @@
             {
                 Write-Host -NoNewline -ForegroundColor Red "Missing mac-address of "
                 Write-Host -NoNewline -ForegroundColor Gray $h.Name
-                if($h.Status)
+                if($h.Status) # Only possible if the host is online
                 {
                     Write-Host -ForegroundColor Red ", retrieving and saving to file"
                     $needToExport = $true
@@ -76,12 +76,12 @@
         $script:table.RowCount = ([Host]::Hosts | ForEach-Object {$_.Row} | Measure-Object -Maximum).Maximum
         $script:table.Columns | ForEach-Object {
             $_.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::NotSortable
-            $_.HeaderText = [Char]($_.Index + 65) # Sets the column headers to A, B, C...
+            $_.HeaderText = [Char]($_.Index + 65) # Set the column headers to A, B, C...
             $_.HeaderCell.Style.Alignment = [System.Windows.Forms.DataGridViewContentAlignment]::MiddleCenter
             $_.Width = $cellSize
         }
         $script:table.Rows | ForEach-Object {
-            $_.HeaderCell.Value = [String]($_.Index + 1) # Sets the row headers to 1, 2, 3...
+            $_.HeaderCell.Value = [String]($_.Index + 1) # Set the row headers to 1, 2, 3...
             $_.HeaderCell.Style.Alignment = [System.Windows.Forms.DataGridViewContentAlignment]::MiddleCenter
             $_.Height = $cellSize
         }
@@ -107,18 +107,19 @@
 
     static [void] Export([String]$path, [String]$delimiter)
     {
+        # Saves all hosts to given .csv file
         [Host]::Hosts | Select-Object Name, Mac, Column, Row | Export-Csv $path -Delimiter $delimiter -NoTypeInformation
     }
 
     static [String[]] GetActive()
     {
-        # Returns the names of the hosts that are online and selected
+        # Returns names of the hosts that are online and selected
         return ([Host]::Hosts | Where-Object {$_.Status -and ($script:table[($_.Column - 1), ($_.Row - 1)]).Selected} | ForEach-Object {$_.Name})
     }
 
     static [String[]] GetMacs()
     {
-        # Returns the mac addresses of selected hosts
+        # Returns mac addresses of selected hosts
         return ([Host]::Hosts | Where-Object {($script:table[($_.Column - 1), ($_.Row - 1)]).Selected -and $_} | ForEach-Object {$_.Mac})
     }
 }
@@ -237,6 +238,7 @@ function StartVBS3Form
     $grid.Controls.Add($parameterTextBox)
 
     $runButton = [System.Windows.Forms.Button]::new()
+    # Add properties to $runButton so that they are usable inside the event handler
     $runButton | Add-Member @{StatePanel=$statePanel; States=$states; AdminCheckbox=$adminCheckBox; MulticastCheckBox=$multicastCheckBox; ConfigTextBox=$configTextBox; ConnectTextBox=$connectTextBox; CpuCountTextBox=$cpuCountTextBox; ExThreadsTextBox=$exThreadsTextBox; MaxMemTextBox=$maxMemTextBox; ParameterTextBox=$parameterTextBox; Form=$form} -PassThru -Force
     $runButton.Text = "Käynnistä"
     $runButton.Add_Click({
@@ -250,7 +252,7 @@ function StartVBS3Form
         if($this.ExThreadsTextBox.Text){ $argument = ("{0} -exThreads={1}" -f $argument, $this.ExThreadsTextBox.Text)}
         if($this.MaxMemTextBox.Text){ $argument = ("{0} -maxMem={1}" -f $argument, $this.MaxMemTextBox.Text)}
         if($this.ParameterTextBox.Text){ $argument = ("{0} {1}") -f $argument, $this.ParameterTextBox.Text }
-        Start-ProgramOnTarget -target ([Host]::GetActive()) -executable "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe" -argument $argument
+        Start-ProgramOnTarget -executable "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe" -argument $argument
         $this.Form.Close()
     })
     $runButton.Dock = [System.Windows.Forms.DockStyle]::Bottom
@@ -264,6 +266,7 @@ function StartVBS3Form
 
 function Invoke-CommandOnTarget([String[]]$target, [Scriptblock]$command, [Bool]$asJob = $true, [Bool]$output = $true)
 {
+    # Runs a command/commands on remote host
     if(!$target){ $target = [Host]::GetActive() }
     if(!$target){ return }
     if($output)
@@ -273,7 +276,7 @@ function Invoke-CommandOnTarget([String[]]$target, [Scriptblock]$command, [Bool]
         Write-Host -NoNewline " on "
         Write-Host -ForegroundColor Gray -Separator ", " $target
     }
-    if($asJob)
+    if($asJob) # If the command is run as a background job, no command output is produced
     {
         Invoke-Command -ComputerName $target -Credential $script:credential -ScriptBlock $command -AsJob
     }
@@ -285,6 +288,7 @@ function Invoke-CommandOnTarget([String[]]$target, [Scriptblock]$command, [Bool]
 
 function Start-ProgramOnTarget([String[]]$target, [String]$executable, [String]$argument, [Switch]$runElevated, [Bool]$output = $true)
 {
+    # Starts an executable on remote host's active session
     if(!$target){ $target = [Host]::GetActive() }
     if(!$target){ return }
     if($output)
@@ -299,7 +303,7 @@ function Start-ProgramOnTarget([String[]]$target, [String]$executable, [String]$
         param($executable, $argument, $runElevated)
         if($argument)
         {
-            $action = New-ScheduledTaskAction -Execute $executable -Argument $argument
+            $action = New-ScheduledTaskAction -Execute $executable -Argument $argument # Create scheduled task action to start the executable 
         }
         else
         {
@@ -308,17 +312,17 @@ function Start-ProgramOnTarget([String[]]$target, [String]$executable, [String]$
         $user = Get-Process -Name "explorer" -IncludeUserName | Select-Object -First 1 -ExpandProperty UserName # Get the user that is logged on the remote computer
         if($runElevated)
         {
-            $principal = New-ScheduledTaskPrincipal -UserId $user -RunLevel Highest
+            $principal = New-ScheduledTaskPrincipal -UserId $user -RunLevel Highest # Create scheduled task principal (the user which the executable is to be run as)
         }
         else
         {
             $principal = New-ScheduledTaskPrincipal -UserId $user
         }
-        $task = New-ScheduledTask -Action $action -Principal $principal
+        $task = New-ScheduledTask -Action $action -Principal $principal # Create new scheduled task with the action and principal
         $taskname = "Luokanhallinta"
         try 
         {
-            $registeredTask = Get-ScheduledTask $taskname -ErrorAction SilentlyContinue
+            $registeredTask = Get-ScheduledTask $taskname -ErrorAction SilentlyContinue # Check if there is already a scheduled task with the same name
         } 
         catch 
         {
@@ -326,11 +330,11 @@ function Start-ProgramOnTarget([String[]]$target, [String]$executable, [String]$
         }
         if ($registeredTask)
         {
-            Unregister-ScheduledTask -InputObject $registeredTask -Confirm:$false
+            Unregister-ScheduledTask -InputObject $registeredTask -Confirm:$false # If so remove it
         }
-        $registeredTask = Register-ScheduledTask $taskname -InputObject $task
-        Start-ScheduledTask -InputObject $registeredTask
-        Unregister-ScheduledTask -InputObject $registeredTask -Confirm:$false
+        $registeredTask = Register-ScheduledTask $taskname -InputObject $task # Register the newly created scheduled task
+        Start-ScheduledTask -InputObject $registeredTask # Start the scheduled task
+        Unregister-ScheduledTask -InputObject $registeredTask -Confirm:$false # Remove the scheduled task
     }
 }
 
@@ -344,7 +348,7 @@ function Start-Target([String[]]$target, [Int]$port)
     $broadcast = [Net.IPAddress]::Parse("255.255.255.255")
     foreach($mac in $target)
     {
-        if($mac)
+        if($mac) # Only try to boot if the host has a mac address specified
         {
             $mac = (($mac.replace(":", "")).replace("-", "")).replace(".", "")
             $target = 0, 2, 4, 6, 8, 10 | ForEach-Object {[Convert]::ToByte($mac.substring($_, 2), 16)}
@@ -362,6 +366,7 @@ function Start-Target([String[]]$target, [Int]$port)
 
 function Copy-ItemToTarget([String[]]$target, [String]$source, [String]$destination, [String]$username = "", [String]$password = "", [String]$parameter = "", [Switch]$runElevated, [Bool]$output = $true)
 {
+    # Copies items from source to remote host destination using "robocopy"
     if(!$target){ $target = [Host]::GetActive() }
     if(!$target){ return }
     if($output)
@@ -375,7 +380,7 @@ function Copy-ItemToTarget([String[]]$target, [String]$source, [String]$destinat
         Write-Host -NoNewline " on "
         Write-Host -ForegroundColor Gray -Separator ", " $target
     }
-    if($username)
+    if($username) # If credentials are specified, "net use" them to access the source
     {
         $argument = '/c net use "{0}" /user:{2} "{3}" && robocopy "{0}" "{1}" {4} & net use /delete "{0}" & timeout /t 10' -f $source, $destination, $username, $password, $parameter
     }
@@ -387,7 +392,7 @@ function Copy-ItemToTarget([String[]]$target, [String]$source, [String]$destinat
 }
 
 # Entry point of the program
-if(!$classFilePath)
+if(!$classFilePath) # If the class file path is not defined open a file dialog to select it
 {
     $dialog = [System.Windows.Forms.OpenFileDialog]::new()
     $dialog.InitialDirectory = $PSScriptRoot
@@ -402,7 +407,7 @@ if(!$classFilePath)
         exit
     }
 }
-[Host]::Populate($classFilePath, " ")
+[Host]::Populate($classFilePath, " ") # Import the class file
 if($username)
 {
     if($password)
@@ -415,12 +420,12 @@ if($username)
         $script:credential = [System.Management.Automation.PSCredential]::new($username)
     }
 }
-else
+else # If the credentials are not defined get them from user
 {
     $script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami.exe)
 }
 $script:root = [System.Windows.Forms.Form]::new()
-$root.Text = "Luokanhallinta v0.18"
+$root.Text = "Luokanhallinta v0.19"
 $root.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($ENV:SYSTEMROOT + "\System32\wksprt.exe")
 
 $script:table = [System.Windows.Forms.DataGridView]::new()
@@ -556,7 +561,7 @@ $commands.Add("Muu", @(
     @{Name="Vaihda käyttäjä"; Click={$script:credential = Get-Credential -Message "Käyttäjällä tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin" -UserName $(whoami.exe)}}
     @{Name="Sulje"; Click={$script:root.Close()}; Shortcut=[System.Windows.Forms.Shortcut]::AltF4}
 ))
-if($debug)
+if($debug) # Add debug commands if debug mode is enabled
 {
     $commands.Add("Debug", @(
         @{Name="Aja..."; Click={Invoke-CommandOnTarget -command ([Scriptblock]::Create((Read-Host -Prompt "command"))) -asJob $false}}
@@ -564,20 +569,20 @@ if($debug)
         @{Name="Kopioi..."; Click={Copy-ItemToTarget -source (Read-Host -Prompt "source") -destination (Read-Host -Prompt "destination") -username (Read-Host -Prompt "username") -password (Read-Host -Prompt "password") -parameter (Read-Host -Prompt "parameter") -runElevated}}
     ))
 }
-foreach($category in $commands.Keys)
+foreach($category in $commands.Keys) # Iterate over command categories
 {
-    $menu = [System.Windows.Forms.ToolStripMenuItem]::new($category)
-    foreach($command in $commands[$category])
+    $menu = [System.Windows.Forms.ToolStripMenuItem]::new($category) # Create a menu for that category
+    foreach($command in $commands[$category]) # Iterate over commands in that category
     {
-        $item = [System.Windows.Forms.ToolStripMenuItem]::new($command.Name)
-        if($command.Init){ $root.Add_Load($command.Init) }
-        $item.Add_Click($command.Click)
-        if($command.Exit){ $root.Add_Closing($command.Exit) }
-        if($command.Shortcut){ $item.ShortcutKeys = $command.Shortcut }
-        $menu.DropDownItems.Add($item) | Out-Null
+        $item = [System.Windows.Forms.ToolStripMenuItem]::new($command.Name) # Create a menu item for that command
+        if($command.Init){ $root.Add_Load($command.Init) } # Link command's init script
+        $item.Add_Click($command.Click) # Link command's click script
+        if($command.Exit){ $root.Add_Closing($command.Exit) } # Link command's exit script
+        if($command.Shortcut){ $item.ShortcutKeys = $command.Shortcut } # Link command's shortcut keys
+        $menu.DropDownItems.Add($item) | Out-Null # Add command to menu
     }
-    $menubar.Items.Add($menu) | Out-Null
+    $menubar.Items.Add($menu) | Out-Null # Add menu to menubar
 }
-$root.MainMenuStrip = $menubar
+$root.MainMenuStrip = $menubar # Add menubar to root window
 $root.Controls.Add($menubar)
-$root.showDialog() | Out-Null
+$root.showDialog() | Out-Null # Show root window
