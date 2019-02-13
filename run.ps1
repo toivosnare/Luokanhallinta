@@ -1,11 +1,9 @@
-Add-Type -AssemblyName System.Windows.Forms # For some reason this needs to be done in seperate script
+param([Switch]$admin)
+Add-Type -AssemblyName System.Windows.Forms
 
 $classFilePath = "$PSScriptRoot\luokka.csv" # $PSScriptRoot is the folder where this script is located
-$username = $(whoami.exe) # Gets username of currently logged on user
-$password = ""
 $addonSyncPath = "\\10.132.0.97\Addons"
-$addonSyncUsername = ""
-$addonSyncPassword = ""
-$debug = $false
+$defaultGateway = "10.132.0.1"
+$internetGateway = "10.132.0.10"
 
 . $PSScriptRoot\hallinta.ps1
