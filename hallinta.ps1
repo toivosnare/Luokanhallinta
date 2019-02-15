@@ -294,7 +294,7 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
         )
         "VBS3" = @(
             @{Name="Käynnistä..."; Click={$script:form.ShowDialog()}}
-            @{Name="Synkaa addonit"; Click={Copy-ItemToTarget -source $addonSyncPath -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" -credential $credentials.AddonSync -parameter "/MIR /XO /NJH"}}
+            @{Name="Synkaa addonit"; Click={Copy-ItemToTarget -source $addonSyncPath -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" -credential $credentials.AddonSync -parameter "/MIR /XO"}}
             @{Name="Synkkaa asetukset"; Click={
                 Write-Host "Copying settings"
                 [Host]::GetActive() | ForEach-Object {
@@ -325,31 +325,24 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
                 Write-Host "Finished"
             }}
             @{Name="Synkkaa missionit"; Click={
-                Write-Host "Copying missions"
-                [Host]::GetActive() | ForEach-Object {
-                    Write-Host -NoNewline ("{0}: " -f $_.Name)
-                    $source = "$ENV:PROGRAMFILES\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions\*"
-                    $session = New-PSSession -ComputerName $_.Name -Credential $credentials.Main
-                    $destination = Invoke-Command -Session $session -ScriptBlock {
-                        $destination = "$ENV:PROGRAMFILES\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions"
-                        if(Test-Path $destination)
-                        {
-                            # Remove-Item -Path "$destination\*" -Recurse
-                            return $destination
-                        }
-                    }
-                    if($destination)
-                    {
-                        Copy-Item -Path $source -ToSession $session -Destination $destination -Recurse
+                $destination = "$ENV:PROGRAMFILES\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions"
+                $dialog = [System.Windows.Forms.OpenFileDialog]::new()
+                $dialog.InitialDirectory = $destination
+                $dialog.Title = "Valitse kopioitavat missionit"
+                $dialog.Filter = "Missionit (*.pbo;*.cbo)|*.pbo;*.cbo"
+                $dialog.MultiSelect = $true
+                if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)
+                {
+                    Write-Host "Copying missions"
+                    [Host]::GetActive() | ForEach-Object {
+                        Write-Host -NoNewline ("{0}: " -f $_.Name)
+                        $session = New-PSSession -ComputerName $_.Name -Credential $credentials.Main
+                        $dialog.FileNames | ForEach-Object { Copy-Item -Path $_ -Destination $destination -ToSession $session }
+                        Remove-PSSession $session
                         Write-Host -ForegroundColor Green "OK"
                     }
-                    else
-                    {
-                        Write-Host -ForegroundColor Red "Couldn't find mpmissions directory"
-                    }
-                    Remove-PSSession $session
+                    Write-Host "Finished"
                 }
-                Write-Host "Finished"
             }}
             @{Name="Sulje"; Click={Invoke-CommandOnTarget -command {Stop-Process -ProcessName VBS3_64 -Force}}}
         )
@@ -384,9 +377,28 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
             @{Name="Päivitä"; Click={Start-ProgramOnTarget -executable "cmd" -argument '/c "C:\Program Files (x86)\F-Secure\fsdbupdate9.exe" & pause' -runElevated}}
         ))
         $commands.Add("Debug", @(
-            @{Name="Aja..."; Click={Invoke-CommandOnTarget -command ([Scriptblock]::Create((Read-Host -Prompt "command"))) -asJob $false}}
-            @{Name="Aja..."; Click={Start-ProgramOnTarget -executable (Read-Host -Prompt "executable") -argument (Read-Host -Prompt "argument")}}
-            @{Name="Kopioi..."; Click={Copy-ItemToTarget -source (Read-Host -Prompt "source") -destination (Read-Host -Prompt "destination") -credential (.{try{return(Get-Credential)}catch{}}) -parameter (Read-Host -Prompt "parameter") -runElevated}}
+            @{Name="Aja skripti..."; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -FilePath (Read-Host -Prompt "path")}}
+            @{Name="Käynnistä ohjelma..."; Click={Start-ProgramOnTarget -executable (Read-Host -Prompt "executable") -argument (Read-Host -Prompt "argument")}}
+            @{Name="Kopioi (pull)"; Click={Copy-ItemToTarget -source (Read-Host -Prompt "source") -destination (Read-Host -Prompt "destination") -credential (.{try{return(Get-Credential)}catch{}}) -parameter (Read-Host -Prompt "parameter") -runElevated}}
+            @{Name="Kopioi (push)"; Click={
+                $dialog = [System.Windows.Forms.OpenFileDialog]::new()
+                $dialog.Title = "Valitse kopioitavat tiedostot"
+                $dialog.Filter = "Kaikki tiedostot (*.*)|*.*"
+                $dialog.MultiSelect = $true
+                if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)
+                {
+                    $destination = Read-Host -Prompt "destination"
+                    Write-Host "Copying file(s)"
+                    [Host]::GetActive() | ForEach-Object {
+                        Write-Host -NoNewline ("{0}: " -f $_.Name)
+                        $session = New-PSSession -ComputerName $_.Name -Credential $credentials.Main
+                        $dialog.FileNames | ForEach-Object { Copy-Item -Path $_ -Destination $destination -ToSession $session }
+                        Remove-PSSession $session
+                        Write-Host -ForegroundColor Green "OK"
+                    }
+                    Write-Host "Finished"
+                }
+            }}
         ))
     }
     foreach($category in $commands.Keys) # Iterate over command categories
@@ -420,7 +432,7 @@ if($admin)
 
 # Setup GUI
 $script:root = [System.Windows.Forms.Form]::new()
-$root.Text = "Luokanhallinta v0.20"
+$root.Text = "Luokanhallinta v0.21"
 $root.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($ENV:SYSTEMROOT + "\System32\wksprt.exe")
 $script:table = [System.Windows.Forms.DataGridView]::new()
 $table.Dock = [System.Windows.Forms.DockStyle]::Fill
