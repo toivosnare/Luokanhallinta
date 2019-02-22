@@ -7,6 +7,7 @@
     [Bool]$Status
     [Int]$Column
     [Int]$Row
+    [System.Management.Automation.Job]$Ping
 
     Host([String]$name, [String]$mac, [Int]$column, [Int]$row)
     {
@@ -14,6 +15,8 @@
         $this.Mac = $mac
         $this.Column = $column
         $this.Row = $row
+        $this.Ping = Invoke-Command -ComputerName $this.Name -Credential $script:credentials.Main -ScriptBlock {"Hello, World!"} -AsJob
+        [Host]::Hosts += $this
     }
 
     static [void] Populate([String]$path, [String]$delimiter)
@@ -22,17 +25,9 @@
         Write-Host -NoNewline "Populating from "
         Write-Host -ForegroundColor Yellow $path
         [Host]::Hosts = @()
+        $needToExport = $false
         Import-Csv $path -Delimiter $delimiter | ForEach-Object {
             $h = [Host]::new($_.Name, $_.Mac, [Int]$_.Column, [Int]$_.Row)
-            $pingJob = Test-Connection -ComputerName $h.Name -Count 1 -AsJob
-            $h | Add-Member -NotePropertyName "pingJob" -NotePropertyValue $pingJob -Force
-            [Host]::Hosts += $h
-        }
-        $needToExport = $false
-        foreach($h in [Host]::Hosts)
-        {
-            $h.pingJob | Wait-Job # Wait for the first ping to complete
-            if((Receive-Job $h.pingJob).StatusCode -eq 0){ $h.Status = $true } # else $false
             if(!$h.Mac) # Try to get missing mac-address if not populated from the file
             {
                 Write-Host -NoNewline -ForegroundColor Red "Missing mac-address of "
@@ -48,30 +43,9 @@
                     Write-Host -ForegroundColor Red ", unable to connect to offline host!"
                 }
             }
-            # Display populate status in console
-            Write-Host -NoNewline -ForegroundColor Gray $h.Name
-            Write-Host -NoNewline (": mac={0}, status=" -f $h.Mac)
-            if($h.Status)
-            {
-                $color = "Green"
-            }
-            else
-            {
-                $color = "Red"
-            }
-            Write-Host -NoNewline -ForegroundColor $color $h.Status
-            Write-Host (", column={0}, row={1}" -f $h.Column, $h.Row)
-            $h.pingJob | Remove-Job
         }
         if($needToExport){ [Host]::Export($path, $delimiter) } # Save received mac-address back to file
-    }
-
-    static [void] Display()
-    {
-        # Displays hosts in the $script:table
-        Write-Host "Displaying"
         $cellSize = 100
-        $script:table.Rows | ForEach-Object {$_.Cells | ForEach-Object { $_.Value = ""; $_.ToolTipText = "" }} # Reset cells
         $script:table.ColumnCount = ([Host]::Hosts | ForEach-Object {$_.Column} | Measure-Object -Maximum).Maximum
         $script:table.RowCount = ([Host]::Hosts | ForEach-Object {$_.Row} | Measure-Object -Maximum).Maximum
         $script:table.Columns | ForEach-Object {
@@ -86,23 +60,38 @@
             $_.Height = $cellSize
         }
         $script:root.MinimumSize = [System.Drawing.Size]::new(($cellSize * $script:table.ColumnCount + $script:table.RowHeadersWidth + 20), ($cellSize * $script:table.RowCount + $script:table.ColumnHeadersHeight + 65))
-        $script:root.Size = [System.Drawing.Size]::new(315, $script:root.MinimumSize.Height) # The size of the window can't be smaller than the minimum size (sorry for the hardcode btw)
-        foreach($h in [Host]::Hosts)
-        {
-            $cell = $script:table[($h.Column - 1), ($h.Row - 1)]
-            $cell.Value = $h.Name
-            # $cell.ToolTipText = $h.Mac
-            if($h.Status)
+        [Host]::Hosts | ForEach-Object { $script:table[($_.Column - 1), ($_.Row - 1)].Value = $_.Name }
+    }
+
+    static [void] Update()
+    {
+        Write-Host "Updating"
+        [Host]::Hosts | ForEach-Object {
+            if($admin)
             {
-                $cell.Style.ForeColor = [System.Drawing.Color]::Green
-                $cell.Style.SelectionForeColor = [System.Drawing.Color]::Green
+                Write-Host -NoNewline ("{0}: " -f $_.Name)
+                Write-Host $_.Ping.State
             }
-            else
+            if($_.Ping.State -ne [System.Management.Automation.JobState]::Running)
             {
-                $cell.Style.ForeColor = [System.Drawing.Color]::Red
-                $cell.Style.SelectionForeColor = [System.Drawing.Color]::Red
+                $cell = $script:table[($_.Column - 1), ($_.Row - 1)]
+                if($_.Ping.State -eq [System.Management.Automation.JobState]::Completed)
+                {
+                    $_.Status = $true
+                    $cell.Style.ForeColor = [System.Drawing.Color]::Green
+                    $cell.Style.SelectionForeColor = [System.Drawing.Color]::Green
+                }
+                elseif ($_.Ping.State -eq [System.Management.Automation.JobState]::Failed)
+                {
+                    $_.Status = $false
+                    $cell.Style.ForeColor = [System.Drawing.Color]::Red
+                    $cell.Style.SelectionForeColor = [System.Drawing.Color]::Red
+                }
+                Remove-Job $_.Ping
+                $_.Ping = Invoke-Command -ComputerName $_.Name -Credential $script:credentials.Main -ScriptBlock {"Hello, World!"} -AsJob
             }
         }
+        
     }
 
     static [void] Export([String]$path, [String]$delimiter)
@@ -146,7 +135,7 @@ function Invoke-CommandOnTarget([String[]]$target, [Scriptblock]$command, [Objec
     }
 }
 
-function Start-ProgramOnTarget([String[]]$target, [String]$executable, [String]$argument, [String]$workingDirectory="C:\", [Switch]$runElevated, [Bool]$output=$true)
+function Start-Program([String[]]$target, [String]$executable, [String]$argument, [String]$workingDirectory="C:\", [Switch]$runElevated, [Bool]$output=$true)
 {
     # Starts an executable on remote host's active session
     if(!$target){ $target = [Host]::GetActive() | ForEach-Object {$_.Name}}
@@ -200,7 +189,7 @@ function Start-ProgramOnTarget([String[]]$target, [String]$executable, [String]$
     }
 }
 
-function Copy-ItemToTarget([String[]]$target, [String]$source, [String]$destination, [PsCredential]$credential, [String]$parameter="", [Switch]$runElevated, [Bool]$output=$true)
+function Start-Robocopy([String[]]$target, [String]$source, [String]$destination, [PsCredential]$credential, [String]$parameter="", [Switch]$runElevated, [Bool]$output=$true)
 {
     # Copies items from source to remote host destination using "robocopy"
     if(!$target){ $target = [Host]::GetActive() | ForEach-Object {$_.Name} }
@@ -222,7 +211,7 @@ function Copy-ItemToTarget([String[]]$target, [String]$source, [String]$destinat
         $argument = 'net use "{0}" /user:{1} "{2}" && {3} & net use /delete "{0}"' -f $source, ($credential.UserName), ($credential.GetNetworkCredential().Password), $argument
     }
     $argument = '/c {0} & timeout /t 10' -f $argument
-    Start-ProgramOnTarget -target $target -executable "cmd" -argument $argument -runElevated:$runElevated -output:$false
+    Start-Program -target $target -executable "cmd" -argument $argument -runElevated:$runElevated -output:$false
 }
 
 function Register-Credentials
@@ -289,12 +278,12 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
                     }
                 }
             }}
-            @{Name="Käynnistä uudelleen"; Click={Invoke-CommandOnTarget -command {shutdown /r /t 10 /c 'Luokanhallinta on ajastanut uudelleen käynnistyksen'}}}
-            @{Name="Sammuta"; Click={Invoke-CommandOnTarget -command {shutdown /s /t 10 /c "Luokanhallinta on ajastanut sammutuksen"}}}
+            @{Name="Käynnistä uudelleen"; Click={Invoke-CommandOnTarget -command {shutdown /r /t 0}}}
+            @{Name="Sammuta"; Click={Invoke-CommandOnTarget -command {shutdown /s /t 0}}}
         )
         "VBS3" = @(
             @{Name="Käynnistä..."; Click={$script:form.ShowDialog()}}
-            @{Name="Synkaa addonit"; Click={Copy-ItemToTarget -source $addonSyncPath -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" -credential $credentials.AddonSync -parameter "/MIR /XO"}}
+            @{Name="Synkkaa addonit"; Click={Start-Robocopy -source $addonSyncPath -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" -credential $credentials.AddonSync -parameter "/MIR /XO"}}
             @{Name="Synkkaa asetukset"; Click={
                 Write-Host "Copying settings"
                 [Host]::GetActive() | ForEach-Object {
@@ -347,12 +336,8 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
             @{Name="Sulje"; Click={Invoke-CommandOnTarget -command {Stop-Process -ProcessName VBS3_64 -Force}}}
         )
         "SteelBeasts" = @(
-            @{Name="Käynnistä"; Click={Start-ProgramOnTarget -workingDirectory "C:\Program Files\eSim Games\SB Pro FI\Release\" -executable "SBPro64CM.exe"}}
+            @{Name="Käynnistä"; Click={Start-Program -workingDirectory "C:\Program Files\eSim Games\SB Pro FI\Release\" -executable "SBPro64CM.exe"}}
             @{Name="Sulje"; Click={Invoke-CommandOnTarget -command {Stop-Process -ProcessName SBPro64CM -Force}}}
-        )
-        "Muu" = @(
-            @{Name="Päivitä"; Click={[Host]::Populate($classFilePath, " "); [Host]::Display()}; Shortcut=[System.Windows.Forms.Keys]::F5}
-            @{Name="Sulje"; Click={$script:root.Close()}; Shortcut=[System.Windows.Forms.Shortcut]::AltF4}
         )
     }
     if($admin) # Add additional commands if admin mode is enabled
@@ -373,14 +358,14 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
             }}}
         ))
         $commands.Add("F-Secure", @(
-            @{Name="Skannaa"; Click={Start-ProgramOnTarget -executable "cmd" -argument '/c "C:\Program Files (x86)\F-Secure\Anti-Virus\fsav.exe" /spyware /system /all /disinf /beep C: D: & pause' -runElevated}}
-            @{Name="Päivitä"; Click={Start-ProgramOnTarget -executable "cmd" -argument '/c "C:\Program Files (x86)\F-Secure\fsdbupdate9.exe" & pause' -runElevated}}
+            @{Name="Skannaa"; Click={Start-Program -executable "cmd" -argument '/c "C:\Program Files (x86)\F-Secure\Anti-Virus\fsav.exe" /spyware /system /all /disinf /beep C: D: & pause' -runElevated}}
+            @{Name="Päivitä"; Click={Start-Program -executable "cmd" -argument '/c "C:\Program Files (x86)\F-Secure\fsdbupdate9.exe" & pause' -runElevated}}
         ))
         $commands.Add("Debug", @(
             @{Name="Aja skripti..."; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -FilePath (Read-Host -Prompt "path")}}
-            @{Name="Käynnistä ohjelma..."; Click={Start-ProgramOnTarget -executable (Read-Host -Prompt "executable") -argument (Read-Host -Prompt "argument")}}
-            @{Name="Kopioi (pull)"; Click={Copy-ItemToTarget -source (Read-Host -Prompt "source") -destination (Read-Host -Prompt "destination") -credential (.{try{return(Get-Credential)}catch{}}) -parameter (Read-Host -Prompt "parameter") -runElevated}}
-            @{Name="Kopioi (push)"; Click={
+            @{Name="Käynnistä ohjelma..."; Click={Start-Program -executable (Read-Host -Prompt "executable") -argument (Read-Host -Prompt "argument")}}
+            @{Name="Kopioi... (pull)"; Click={Start-Robocopy -source (Read-Host -Prompt "source") -destination (Read-Host -Prompt "destination") -credential (.{try{return(Get-Credential)}catch{}}) -parameter (Read-Host -Prompt "parameter") -runElevated}}
+            @{Name="Kopioi... (push)"; Click={
                 $dialog = [System.Windows.Forms.OpenFileDialog]::new()
                 $dialog.Title = "Valitse kopioitavat tiedostot"
                 $dialog.Filter = "Kaikki tiedostot (*.*)|*.*"
@@ -428,11 +413,12 @@ if($admin)
     }
     until ($script:credentials.Admin.UserName -eq $givenAdminCredentials.UserName -and $script:credentials.Admin.GetNetworkCredential().Password -eq $givenAdminCredentials.GetNetworkCredential().Password)
     Write-Host "Access granted"
+    if($adminClassFilePath){ $classFilePath = $adminClassFilePath }
 }
 
 # Setup GUI
 $script:root = [System.Windows.Forms.Form]::new()
-$root.Text = "Luokanhallinta v0.21"
+$root.Text = "Luokanhallinta v0.22"
 $root.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($ENV:SYSTEMROOT + "\System32\wksprt.exe")
 $script:table = [System.Windows.Forms.DataGridView]::new()
 $table.Dock = [System.Windows.Forms.DockStyle]::Fill
@@ -633,7 +619,7 @@ $runButton.Add_Click({
     if($this.ExThreadsTextBox.Text){ $argument = ("{0} -exThreads={1}" -f $argument, $this.ExThreadsTextBox.Text)}
     if($this.MaxMemTextBox.Text){ $argument = ("{0} -maxMem={1}" -f $argument, $this.MaxMemTextBox.Text)}
     if($this.ParameterTextBox.Text){ $argument = ("{0} {1}") -f $argument, $this.ParameterTextBox.Text }
-    Start-ProgramOnTarget -executable "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe" -argument $argument
+    Start-Program -executable "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe" -argument $argument
     $this.Form.Close()
 })
 $runButton.Dock = [System.Windows.Forms.DockStyle]::Bottom
@@ -665,5 +651,8 @@ if(!$classFilePath) # If the class file path is not defined in run.ps1 open a fi
     }
 }
 [Host]::Populate($classFilePath, " ") # Import the class file
-[Host]::Display()
+$timer = [System.Windows.Forms.Timer]::new()
+$timer.Interval = 5000
+$timer.Add_Tick({ [Host]::Update() })
+$timer.Start()
 $root.showDialog() | Out-Null # Show root window

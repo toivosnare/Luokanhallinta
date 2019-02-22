@@ -29,7 +29,7 @@ sc.exe config "WinRM" start=auto
 4. Lataa [run.ps1](/run.ps1) ja [hallinta.ps1](/hallinta.ps1) samaan kansioon.
 5. Lisää hallintakoneen TrustedHosts listaan luokan koneet.
 ```PowerShell
-Set-Item WSMan:\localhost\Client\TrustedHosts -value "10.132.0.*" # Esim.
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value "10.132.0.*" # Esim.
 ```
 6. Luo välilyönnein erotettu .csv luokkatiedosto sarakkeilla "Name", "Mac", "Row", "Column" ([esimerkki](/luokka.csv)).
 7. Avaa [run.ps1](/run.ps1) tekstieditorissa. Laita $classFilePath muuttujan arvoksi luomasi luokkatiedoston polku (jos luokkatiedostoa ei määritellä erikseen, ohjelma pyytää käyttäjää määrittelemään sen käynnistyksen yhteydessä). Määritä $addonSyncPath muuttujaan polku, josta addonit synkataan. Määritä myös gateway muutujiin yhdyskäytävien ip-osoitteet, jos luokanhallinan internet pois/päälle ominaisuutta halutaan käyttää.
@@ -40,5 +40,5 @@ Set-Item WSMan:\localhost\Client\TrustedHosts -value "10.132.0.*" # Esim.
 * Luokanhallinan voi käynnistää admin tilassa ajamalla [run.ps1](/run.ps1) skriptin -admin flagilla. Käynnistyksen yhteydessä ohjelma pytää admin tunnukset, joiden avulla saa käyttöönsä luokanhallinan kaikki ominaisuudet.
 * Käyttäjätunnuksilla, joilla ajetaan etäkomentoja (main) tulee olla järjestelmänvalvojan oikeudet hallittaviin tietokoneisiin.
 * Luokanhallinta ei toimi, jos hallittavan tietokoneen salasana on vanhentunut.
-* Jos luokanhallinta on ollut käyttämättömänä auki pitemmän ajan, kannattaa se käynnistää uudestaan tai vähintääkin päivittää painamalla F5.
+* Etäkäynnistettävässä tietokoneessa pitää olla Wake-on-LAN päällä.
 * F-Securen automaattinen päivitys tarvitsee toimiakseen päivitystyökalun (fsdbupdate9.exe), jonka voi ladata F-Securen [nettisivuilta](https://www.f-secure.com/en/web/labs_global/database-updates). Sijoita tiedosto F-Securen juurikansioon (C:\Program Files (x86)\F-Secure).
