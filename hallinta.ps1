@@ -283,26 +283,26 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
         )
         "VBS3" = @(
             @{Name="Käynnistä..."; Click={$script:form.ShowDialog()}}
-            @{Name="Synkkaa addonit"; Click={Start-Robocopy -source $addonSyncPath -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" -credential $credentials.AddonSync -parameter "/MIR /XO"}}
+            @{Name="Synkkaa addonit"; Click={Start-Robocopy -source $addonSyncPath -destination "$vbs3Path\mycontent\addons" -credential $credentials.AddonSync -parameter "/MIR /XO"}}
             @{Name="Synkkaa asetukset"; Click={
                 Write-Host "Copying settings"
                 [Host]::GetActive() | ForEach-Object {
                     Write-Host -NoNewline ("{0}: " -f $_.Name)
                     $session = New-PSSession -ComputerName $_.Name -Credential $credentials.Main
-                    $user, $vbs3Path = Invoke-Command -Session $session -ScriptBlock {
+                    $user, $vbs3Folder = Invoke-Command -Session $session -ScriptBlock {
                         $domain, $user = (Get-CimInstance –ClassName Win32_ComputerSystem | Select-Object -ExpandProperty UserName).Split("\")
                         $sid = Get-LocalUser -Name $user | Select-Object -ExpandProperty SID
                         $profilePath = Get-WmiObject Win32_UserProfile | Where-Object {$_.SID -eq $sid} | Select-Object -ExpandProperty LocalPath
-                        $vbs3Path = Join-Path -Path $profilePath -ChildPath "Documents\VBS3"
-                        if(Test-Path -Path $vbs3Path)
+                        $vbs3Folder = Join-Path -Path $profilePath -ChildPath "Documents\VBS3"
+                        if(Test-Path -Path $vbs3Folder)
                         {
-                            return ($user, $vbs3Path)
+                            return ($user, $vbs3Folder)
                         }
                     }
-                    if($user -and $vbs3Path)
+                    if($user -and $vbs3Folder)
                     {
-                        Copy-Item -Path "$ENV:USERPROFILE\Documents\VBS3\VBS3.cfg" -ToSession $session -Destination "$vbs3Path\VBS3.cfg"
-                        Copy-Item -Path "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile" -ToSession $session -Destination "$vbs3Path\$user.VBS3Profile"
+                        Copy-Item -Path "$ENV:USERPROFILE\Documents\VBS3\VBS3.cfg" -ToSession $session -Destination "$vbs3Folder\VBS3.cfg"
+                        Copy-Item -Path "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile" -ToSession $session -Destination "$vbs3Folder\$user.VBS3Profile"
                         Write-Host -ForegroundColor Green "OK"
                     }
                     else
@@ -314,7 +314,7 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
                 Write-Host "Finished"
             }}
             @{Name="Synkkaa missionit"; Click={
-                $destination = "$ENV:PROGRAMFILES\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions"
+                $destination = "$vbs3Path\mpmissions"
                 $dialog = [System.Windows.Forms.OpenFileDialog]::new()
                 $dialog.InitialDirectory = $destination
                 $dialog.Title = "Valitse kopioitavat missionit"
@@ -336,7 +336,7 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
             @{Name="Sulje"; Click={Invoke-CommandOnTarget -command {Stop-Process -ProcessName VBS3_64 -Force}}}
         )
         "SteelBeasts" = @(
-            @{Name="Käynnistä"; Click={Start-Program -workingDirectory "C:\Program Files\eSim Games\SB Pro FI\Release\" -executable "SBPro64CM.exe"}}
+            @{Name="Käynnistä"; Click={Start-Program -workingDirectory $steelBeastsPath -executable "SBPro64CM.exe"}}
             @{Name="Sulje"; Click={Invoke-CommandOnTarget -command {Stop-Process -ProcessName SBPro64CM -Force}}}
         )
     }
@@ -619,7 +619,7 @@ $runButton.Add_Click({
     if($this.ExThreadsTextBox.Text){ $argument = ("{0} -exThreads={1}" -f $argument, $this.ExThreadsTextBox.Text)}
     if($this.MaxMemTextBox.Text){ $argument = ("{0} -maxMem={1}" -f $argument, $this.MaxMemTextBox.Text)}
     if($this.ParameterTextBox.Text){ $argument = ("{0} {1}") -f $argument, $this.ParameterTextBox.Text }
-    Start-Program -executable "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe" -argument $argument
+    Start-Program -executable "$vbs3Path\VBS3_64.exe" -argument $argument
     $this.Form.Close()
 })
 $runButton.Dock = [System.Windows.Forms.DockStyle]::Bottom
