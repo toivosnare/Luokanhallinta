@@ -345,16 +345,20 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
         $commands.Add("Internet", @(
             @{Name="Päälle"; Click={Invoke-CommandOnTarget -params @($defaultGateway, $internetGateway) -command {
                 param($defaultGateway, $internetGateway)
-                $index = Get-NetAdapter -Physical | Where-Object Status -eq "Up" | Select-Object -ExpandProperty InterfaceIndex
-                Remove-NetRoute -InterfaceIndex $index -Confirm:$false
-                New-NetRoute -InterfaceIndex $index -DestinationPrefix "10.132.0.0/16" -NextHop $defaultGateway
-                New-NetRoute -InterfaceIndex $index -DestinationPrefix "0.0.0.0/0" -NextHop $internetGateway
+                $alias = Get-NetAdapter -Physical | Where-Object Status -eq "Up" | Select-Object -First 1 -ExpandProperty InterfaceAlias
+                Remove-NetRoute -InterfaceAlias $alias -Confirm:$false
+                New-NetRoute -InterfaceAlias $alias -DestinationPrefix "10.132.0.0/16" -NextHop $defaultGateway
+                New-NetRoute -InterfaceAlias $alias -DestinationPrefix "0.0.0.0/0" -NextHop $internetGateway
+                Set-NetConnectionProfile -InterfaceAlias $alias -NetworkCategory Private
+                Restart-NetAdapter -InterfaceAlias $alias
             }}}
             @{Name="Pois"; Click={Invoke-CommandOnTarget -params @($defaultGateway) -command {
                 param($defaultGateway)
-                $index = Get-NetAdapter -Physical | Where-Object Status -eq "Up" | Select-Object -ExpandProperty InterfaceIndex
-                Remove-NetRoute -InterfaceIndex $index -Confirm:$false
-                New-NetRoute -InterfaceIndex $index -DestinationPrefix "10.132.0.0/16" -NextHop $defaultGateway
+                $alias = Get-NetAdapter -Physical | Where-Object Status -eq "Up" | Select-Object -First 1 -ExpandProperty InterfaceAlias
+                Remove-NetRoute -InterfaceAlias $alias -Confirm:$false
+                New-NetRoute -InterfaceAlias $alias -DestinationPrefix "10.132.0.0/16" -NextHop $defaultGateway
+                Set-NetConnectionProfile -InterfaceAlias $alias -NetworkCategory Private
+                Restart-NetAdapter -InterfaceAlias $alias
             }}}
         ))
         $commands.Add("F-Secure", @(
