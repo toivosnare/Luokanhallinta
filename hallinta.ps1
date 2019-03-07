@@ -90,8 +90,7 @@
                 Remove-Job $_.Ping
                 $_.Ping = Invoke-Command -ComputerName $_.Name -Credential $script:credentials.Main -ScriptBlock {"Hello, World!"} -AsJob
             }
-        }
-        
+        }   
     }
 
     static [void] Export([String]$path, [String]$delimiter)
@@ -244,6 +243,17 @@ function Register-Credentials
     }
 }
 
+function Get-RobocopyArgs([String]$source, [String]$destination, [PsCredential]$credential, [String]$parameter)
+{
+    $argument = 'robocopy "{0}" "{1}" {2}' -f $source, $destination, $parameter
+    if($credential) # If credentials are specified, "net use" them to access the source
+    {
+        $argument = 'net use "{0}" /user:{1} "{2}" && {3} & net use /delete "{0}"' -f $source, ($credential.UserName), ($credential.GetNetworkCredential().Password), $argument
+    }
+    $argument = '/c {0} & timeout /t 10' -f $argument
+    return $argument
+}
+
 function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
 {
     $commands = [ordered]@{
@@ -253,56 +263,32 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
             @{Name="Ei mitään"; Click={$script:table.ClearSelection()}; Shortcut=[System.Windows.Forms.Shortcut]::CtrlD}
         )
         "Tietokone" = @(
-            @{Name="Käynnistä"; Click={
-                # Boots selected remote hosts by broadcasting the magic packet (Wake-On-LAN)
-                $target = [Host]::GetSelected()
-                Write-Host -NoNewline "Starting "
-                Write-Host -ForegroundColor Yellow -Separator ", " ($target | ForEach-Object {$_.Name})
-                $broadcast = [Net.IPAddress]::Parse("255.255.255.255")
-                $port = 9
-                foreach($h in $target)
-                {
-                    if($h.Mac) # Only try to boot if the host has a mac address specified
-                    {
-                        $m = (($h.Mac.replace(":", "")).replace("-", "")).replace(".", "")
-                        $t = 0, 2, 4, 6, 8, 10 | ForEach-Object {[Convert]::ToByte($m.substring($_, 2), 16)}
-                        $packet = (,[Byte]255 * 6) + ($t * 16) # Creates the magic packet
-                        $UDPclient = [System.Net.Sockets.UdpClient]::new()
-                        $UDPclient.Connect($broadcast, $port)
-                        $UDPclient.Send($packet, 102) # Sends the magic packet
-                    }
-                    else
-                    {
-                        Write-Host -NoNewline -ForegroundColor Red "Missing mac of "
-                        Write-Host $h.Name
-                    }
-                }
-            }}
-            @{Name="Käynnistä uudelleen"; Click={Invoke-CommandOnTarget -command {shutdown /r /t 0}}}
-            @{Name="Sammuta"; Click={Invoke-CommandOnTarget -command {shutdown /s /t 0}}}
+            @{Name="Käynnistä"; Click={& "$PSScriptRoot\wakeOnLan.ps1" -target ([Host]::GetSelected() | ForEach-Object {$_.Mac}) }}
+            @{Name="Käynnistä uudelleen"; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -ScriptBlock {shutdown.exe /r /t 0}}}
+            @{Name="Sammuta"; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -ScriptBlock {shutdown.exe /s /t 0}}}
         )
         "VBS3" = @(
             @{Name="Käynnistä..."; Click={$script:form.ShowDialog()}}
-            @{Name="Synkkaa addonit"; Click={Start-Robocopy -source $addonSyncPath -destination "%programfiles%\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mycontent\addons" -credential $credentials.AddonSync -parameter "/MIR /XO"}}
+            @{Name="Synkkaa addonit"; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -ArgumentList "cmd", (Get-RobocopyArgs -source $addonSyncPath -destination "$vbs3Path\mycontent\addons" -credential $script:credentials.addonSync -parameter "/MIR /XO") -FilePath "$PSScriptRoot\startProgram.ps1"}}
             @{Name="Synkkaa asetukset"; Click={
                 Write-Host "Copying settings"
                 [Host]::GetActive() | ForEach-Object {
                     Write-Host -NoNewline ("{0}: " -f $_.Name)
                     $session = New-PSSession -ComputerName $_.Name -Credential $credentials.Main
-                    $user, $vbs3Path = Invoke-Command -Session $session -ScriptBlock {
-                        $domain, $user = (Get-CimInstance –ClassName Win32_ComputerSystem | Select-Object -ExpandProperty UserName).Split("\")
+                    $user, $vbs3Folder = Invoke-Command -Session $session -ScriptBlock {
+                    $domain, $user = (Get-CimInstance –ClassName Win32_ComputerSystem | Select-Object -ExpandProperty UserName).Split("\")
                         $sid = Get-LocalUser -Name $user | Select-Object -ExpandProperty SID
                         $profilePath = Get-WmiObject Win32_UserProfile | Where-Object {$_.SID -eq $sid} | Select-Object -ExpandProperty LocalPath
-                        $vbs3Path = Join-Path -Path $profilePath -ChildPath "Documents\VBS3"
-                        if(Test-Path -Path $vbs3Path)
+                        $vbs3Folder = Join-Path -Path $profilePath -ChildPath "Documents\VBS3"
+                        if(Test-Path -Path $vbs3Folder)
                         {
-                            return ($user, $vbs3Path)
+                            return ($user, $vbs3Folder)
                         }
                     }
-                    if($user -and $vbs3Path)
+                    if($user -and $vbs3Folder)
                     {
-                        Copy-Item -Path "$ENV:USERPROFILE\Documents\VBS3\VBS3.cfg" -ToSession $session -Destination "$vbs3Path\VBS3.cfg"
-                        Copy-Item -Path "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile" -ToSession $session -Destination "$vbs3Path\$user.VBS3Profile"
+                        Copy-Item -Path "$ENV:USERPROFILE\Documents\VBS3\VBS3.cfg" -ToSession $session -Destination "$vbs3Folder\VBS3.cfg"
+                        Copy-Item -Path "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile" -ToSession $session -Destination "$vbs3Folder\$user.VBS3Profile"
                         Write-Host -ForegroundColor Green "OK"
                     }
                     else
@@ -314,7 +300,7 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
                 Write-Host "Finished"
             }}
             @{Name="Synkkaa missionit"; Click={
-                $destination = "$ENV:PROGRAMFILES\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\mpmissions"
+                $destination = "$vbs3Path\mpmissions"
                 $dialog = [System.Windows.Forms.OpenFileDialog]::new()
                 $dialog.InitialDirectory = $destination
                 $dialog.Title = "Valitse kopioitavat missionit"
@@ -333,37 +319,26 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
                     Write-Host "Finished"
                 }
             }}
-            @{Name="Sulje"; Click={Invoke-CommandOnTarget -command {Stop-Process -ProcessName VBS3_64 -Force}}}
+            @{Name="Sulje"; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -ScriptBlock {Stop-Process -ProcessName VBS3_64 -Force}}}
         )
         "SteelBeasts" = @(
-            @{Name="Käynnistä"; Click={Start-Program -workingDirectory "C:\Program Files\eSim Games\SB Pro FI\Release\" -executable "SBPro64CM.exe"}}
-            @{Name="Sulje"; Click={Invoke-CommandOnTarget -command {Stop-Process -ProcessName SBPro64CM -Force}}}
+            @{Name="Käynnistä"; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -ArgumentList "SBPro64CM.exe", "", $steelBeastsPath -FilePath "$PSScriptRoot\startProgram.ps1"}}
+            @{Name="Sulje"; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -ScriptBlock {Stop-Process -ProcessName SBPro64CM -Force}}}
         )
     }
     if($admin) # Add additional commands if admin mode is enabled
     {
         $commands.Add("Internet", @(
-            @{Name="Päälle"; Click={Invoke-CommandOnTarget -params @($defaultGateway, $internetGateway) -command {
-                param($defaultGateway, $internetGateway)
-                $index = Get-NetAdapter -Physical | Where-Object Status -eq "Up" | Select-Object -ExpandProperty InterfaceIndex
-                Remove-NetRoute -InterfaceIndex $index -Confirm:$false
-                New-NetRoute -InterfaceIndex $index -DestinationPrefix "10.132.0.0/16" -NextHop $defaultGateway
-                New-NetRoute -InterfaceIndex $index -DestinationPrefix "0.0.0.0/0" -NextHop $internetGateway
-            }}}
-            @{Name="Pois"; Click={Invoke-CommandOnTarget -params @($defaultGateway) -command {
-                param($defaultGateway)
-                $index = Get-NetAdapter -Physical | Where-Object Status -eq "Up" | Select-Object -ExpandProperty InterfaceIndex
-                Remove-NetRoute -InterfaceIndex $index -Confirm:$false
-                New-NetRoute -InterfaceIndex $index -DestinationPrefix "10.132.0.0/16" -NextHop $defaultGateway
-            }}}
+            @{Name="Päälle"; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -ArgumentList $true -FilePath "$PSScriptRoot\netti.ps1"}}
+            @{Name="Pois"; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -ArgumentList $false -FilePath "$PSScriptRoot\netti.ps1"}}
         ))
         $commands.Add("F-Secure", @(
-            @{Name="Skannaa"; Click={Start-Program -executable "cmd" -argument '/c "C:\Program Files (x86)\F-Secure\Anti-Virus\fsav.exe" /spyware /system /all /disinf /beep C: D: & pause' -runElevated}}
-            @{Name="Päivitä"; Click={Start-Program -executable "cmd" -argument '/c "C:\Program Files (x86)\F-Secure\fsdbupdate9.exe" & pause' -runElevated}}
+            @{Name="Skannaa"; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -ArgumentList 'cmd', '/c "C:\Program Files (x86)\F-Secure\Anti-Virus\fsav.exe" /spyware /system /all /disinf /beep C: D: & pause', "", $true -FilePath "$PSScriptRoot\startProgram.ps1"}}
+            @{Name="Päivitä"; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -ArgumentList 'cmd', '/c "C:\Program Files (x86)\F-Secure\fsdbupdate9.exe" & pause', "", $true -FilePath "$PSScriptRoot\startProgram.ps1"}}
         ))
         $commands.Add("Debug", @(
             @{Name="Aja skripti..."; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -FilePath (Read-Host -Prompt "path")}}
-            @{Name="Käynnistä ohjelma..."; Click={Start-Program -executable (Read-Host -Prompt "executable") -argument (Read-Host -Prompt "argument")}}
+            @{Name="Käynnistä ohjelma..."; Click={Invoke-Command -ComputerName ([Host]::GetActive() | ForEach-Object {$_.Name}) -Credential $script:credentials.Main -ArgumentList (Read-Host -Prompt "executable"), (Read-Host -Prompt "argument") -FilePath "$PSScriptRoot\startProgram.ps1"}}
             @{Name="Kopioi... (pull)"; Click={Start-Robocopy -source (Read-Host -Prompt "source") -destination (Read-Host -Prompt "destination") -credential (.{try{return(Get-Credential)}catch{}}) -parameter (Read-Host -Prompt "parameter") -runElevated}}
             @{Name="Kopioi... (push)"; Click={
                 $dialog = [System.Windows.Forms.OpenFileDialog]::new()
@@ -619,7 +594,7 @@ $runButton.Add_Click({
     if($this.ExThreadsTextBox.Text){ $argument = ("{0} -exThreads={1}" -f $argument, $this.ExThreadsTextBox.Text)}
     if($this.MaxMemTextBox.Text){ $argument = ("{0} -maxMem={1}" -f $argument, $this.MaxMemTextBox.Text)}
     if($this.ParameterTextBox.Text){ $argument = ("{0} {1}") -f $argument, $this.ParameterTextBox.Text }
-    Start-Program -executable "C:\Program Files\Bohemia Interactive Simulations\VBS3 3.9.0.FDF EZYQC_FI\VBS3_64.exe" -argument $argument
+    Start-Program -executable "$vbs3Path\VBS3_64.exe" -argument $argument
     $this.Form.Close()
 })
 $runButton.Dock = [System.Windows.Forms.DockStyle]::Bottom
