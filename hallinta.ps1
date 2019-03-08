@@ -286,20 +286,20 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
             @{Name="Synkkaa addonit"; Click={Start-Robocopy -source $addonSyncPath -destination "$vbs3Path\mycontent\addons" -credential $credentials.AddonSync -parameter "/MIR /XO"}}
             @{Name="Synkkaa asetukset"; Click={
                 Write-Host "Copying settings"
-                [Host]::GetActive() | ForEach-Object {
+                [Host]::GetActive() | ForEach-Object { # Loop through all selected hosts
                     Write-Host -NoNewline ("{0}: " -f $_.Name)
-                    $session = New-PSSession -ComputerName $_.Name -Credential $credentials.Main
-                    $user, $vbs3Folder = Invoke-Command -Session $session -ScriptBlock {
-                        $domain, $user = (Get-CimInstance –ClassName Win32_ComputerSystem | Select-Object -ExpandProperty UserName).Split("\")
-                        $sid = Get-LocalUser -Name $user | Select-Object -ExpandProperty SID
-                        $profilePath = Get-WmiObject Win32_UserProfile | Where-Object {$_.SID -eq $sid} | Select-Object -ExpandProperty LocalPath
-                        $vbs3Folder = Join-Path -Path $profilePath -ChildPath "Documents\VBS3"
-                        if(Test-Path -Path $vbs3Folder)
+                    $session = New-PSSession -ComputerName $_.Name -Credential $credentials.Main # Create a session for host
+                    $user, $vbs3Folder = Invoke-Command -Session $session -ScriptBlock { # Try to get the username and VBS3 folder path of the currently logged in user
+                        $domain, $user = (Get-CimInstance –ClassName Win32_ComputerSystem | Select-Object -ExpandProperty UserName).Split("\") # Get the username
+                        $sid = Get-LocalUser -Name $user | Select-Object -ExpandProperty SID # Get the SID of the user
+                        $profilePath = Get-WmiObject Win32_UserProfile | Where-Object {$_.SID -eq $sid} | Select-Object -ExpandProperty LocalPath # Get the userprofile path for that SID
+                        $vbs3Folder = Join-Path -Path $profilePath -ChildPath "Documents\VBS3" 
+                        if(Test-Path -Path $vbs3Folder) # Check if userprofile folder contains VBS3 folder
                         {
                             return ($user, $vbs3Folder)
                         }
                     }
-                    if($user -and $vbs3Folder)
+                    if($user -and $vbs3Folder) # If succesfully got the username and VBS3 folder copy settings to there
                     {
                         Copy-Item -Path "$ENV:USERPROFILE\Documents\VBS3\VBS3.cfg" -ToSession $session -Destination "$vbs3Folder\VBS3.cfg"
                         Copy-Item -Path "$ENV:USERPROFILE\Documents\VBS3\$ENV:USERNAME.VBS3Profile" -ToSession $session -Destination "$vbs3Folder\$user.VBS3Profile"
@@ -315,18 +315,18 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
             }}
             @{Name="Synkkaa missionit"; Click={
                 $destination = "$vbs3Path\mpmissions"
-                $dialog = [System.Windows.Forms.OpenFileDialog]::new()
+                $dialog = [System.Windows.Forms.OpenFileDialog]::new() # Open a dialog for the user to select the missions to sync
                 $dialog.InitialDirectory = $destination
                 $dialog.Title = "Valitse kopioitavat missionit"
                 $dialog.Filter = "Missionit (*.pbo;*.cbo)|*.pbo;*.cbo"
                 $dialog.MultiSelect = $true
-                if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)
+                if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) # If the user selects missions and presses ok
                 {
                     Write-Host "Copying missions"
-                    [Host]::GetActive() | ForEach-Object {
+                    [Host]::GetActive() | ForEach-Object { # Loop through the selected hosts
                         Write-Host -NoNewline ("{0}: " -f $_.Name)
-                        $session = New-PSSession -ComputerName $_.Name -Credential $credentials.Main
-                        $dialog.FileNames | ForEach-Object { Copy-Item -Path $_ -Destination $destination -ToSession $session }
+                        $session = New-PSSession -ComputerName $_.Name -Credential $credentials.Main # Create a session for that host
+                        $dialog.FileNames | ForEach-Object { Copy-Item -Path $_ -Destination $destination -ToSession $session } # Copy selected missions to host
                         Remove-PSSession $session
                         Write-Host -ForegroundColor Green "OK"
                     }
@@ -345,20 +345,20 @@ function Register-Commands([System.Windows.Forms.MenuStrip]$menubar)
         $commands.Add("Internet", @(
             @{Name="Päälle"; Click={Invoke-CommandOnTarget -params @($defaultGateway, $internetGateway) -command {
                 param($defaultGateway, $internetGateway)
-                $alias = Get-NetAdapter -Physical | Where-Object Status -eq "Up" | Select-Object -First 1 -ExpandProperty InterfaceAlias
-                Remove-NetRoute -InterfaceAlias $alias -Confirm:$false
-                New-NetRoute -InterfaceAlias $alias -DestinationPrefix "10.132.0.0/16" -NextHop $defaultGateway
-                New-NetRoute -InterfaceAlias $alias -DestinationPrefix "0.0.0.0/0" -NextHop $internetGateway
-                Set-NetConnectionProfile -InterfaceAlias $alias -NetworkCategory Private
-                Restart-NetAdapter -InterfaceAlias $alias
+                $alias = Get-NetAdapter -Physical | Where-Object Status -eq "Up" | Select-Object -First 1 -ExpandProperty InterfaceAlias # Get the name of active network adapter
+                Remove-NetRoute -InterfaceAlias $alias -Confirm:$false # Remove all net routes
+                New-NetRoute -InterfaceAlias $alias -DestinationPrefix "10.132.0.0/16" -NextHop $defaultGateway # Add gateway to access VKY-network hosts
+                New-NetRoute -InterfaceAlias $alias -DestinationPrefix "0.0.0.0/0" -NextHop $internetGateway # Add gateway to access internet
+                Set-NetConnectionProfile -InterfaceAlias $alias -NetworkCategory Private # Set the network adapter profile to private
+                Restart-NetAdapter -InterfaceAlias $alias # Reset the adapter
             }}}
             @{Name="Pois"; Click={Invoke-CommandOnTarget -params @($defaultGateway) -command {
                 param($defaultGateway)
-                $alias = Get-NetAdapter -Physical | Where-Object Status -eq "Up" | Select-Object -First 1 -ExpandProperty InterfaceAlias
-                Remove-NetRoute -InterfaceAlias $alias -Confirm:$false
-                New-NetRoute -InterfaceAlias $alias -DestinationPrefix "10.132.0.0/16" -NextHop $defaultGateway
-                Set-NetConnectionProfile -InterfaceAlias $alias -NetworkCategory Private
-                Restart-NetAdapter -InterfaceAlias $alias
+                $alias = Get-NetAdapter -Physical | Where-Object Status -eq "Up" | Select-Object -First 1 -ExpandProperty InterfaceAlias # Get the name of active network adapter
+                Remove-NetRoute -InterfaceAlias $alias -Confirm:$false # Remove all net routes
+                New-NetRoute -InterfaceAlias $alias -DestinationPrefix "10.132.0.0/16" -NextHop $defaultGateway # Add gateway to access VKY-network hosts
+                Set-NetConnectionProfile -InterfaceAlias $alias -NetworkCategory Private # Set the network adapter profile to private
+                Restart-NetAdapter -InterfaceAlias $alias # Reset the adapter
             }}}
         ))
         $commands.Add("F-Secure", @(
@@ -417,7 +417,7 @@ if($admin)
     }
     until ($script:credentials.Admin.UserName -eq $givenAdminCredentials.UserName -and $script:credentials.Admin.GetNetworkCredential().Password -eq $givenAdminCredentials.GetNetworkCredential().Password)
     Write-Host "Access granted"
-    if($adminClassFilePath){ $classFilePath = $adminClassFilePath }
+    if($adminClassFilePath){ $classFilePath = $adminClassFilePath } # Use seperate class mode in admin mode if it has been defined in run.ps1
 }
 
 # Setup GUI
@@ -509,14 +509,6 @@ $table.Add_CellMouseUp({
         }
     }
 })
-$states = [ordered]@{
-    "Kokonäyttö" = ""
-    "Ikkuna" = "-window"
-    "Palvelin" = "-server"
-    "Simulation Client" = "-simulationClient=0"
-    "After Action Review" = "-simulationClient=1"
-    "SC + AAR" = "-simulationClient=2"
-}
 $script:form = [System.Windows.Forms.Form]::new()
 $form.AutoSize = $true
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
@@ -609,12 +601,20 @@ $parameterTextBox.Width = 200
 $grid.SetCellPosition($parameterTextBox, [System.Windows.Forms.TableLayoutPanelCellPosition]::new(1, 8)) 
 $grid.Controls.Add($parameterTextBox)
 $runButton = [System.Windows.Forms.Button]::new()
+$states = [ordered]@{
+    "Kokonäyttö" = ""
+    "Ikkuna" = "-window"
+    "Palvelin" = "-server"
+    "Simulation Client" = "-simulationClient=0"
+    "After Action Review" = "-simulationClient=1"
+    "SC + AAR" = "-simulationClient=2"
+}
 # Add properties to $runButton so that they are usable inside the event handler
 $runButton | Add-Member @{StatePanel=$statePanel; States=$states; AdminCheckbox=$adminCheckBox; MulticastCheckBox=$multicastCheckBox; ConfigTextBox=$configTextBox; ConnectTextBox=$connectTextBox; CpuCountTextBox=$cpuCountTextBox; ExThreadsTextBox=$exThreadsTextBox; MaxMemTextBox=$maxMemTextBox; ParameterTextBox=$parameterTextBox; Form=$form} -PassThru -Force | Out-Null
 $runButton.Text = "Käynnistä"
-$runButton.Add_Click({
-    $state = $this.StatePanel.Controls | Where-Object {$_.Checked} | Select-Object -ExpandProperty Text
-    $argument = $this.States[$state]
+$runButton.Add_Click({ # This happens when the run button is clicked
+    $state = $this.StatePanel.Controls | Where-Object {$_.Checked} | Select-Object -ExpandProperty Text # Get the text of the radio button that is selected
+    $argument = $this.States[$state] # Set the argument to the state that corresponds to the selected radio button
     if($this.AdminCheckbox.Checked){ $argument = ("{0} -admin" -f $argument)}
     if(!$this.MulticastCheckBox.Checked){ $argument = ("{0} -multicast=0" -f $argument)}
     if($this.ConfigTextBox.Text){ $argument = ("{0} -cfg={1}" -f $argument, $this.ConfigTextBox.Text)}
@@ -638,7 +638,7 @@ $root.MainMenuStrip = $menubar # Add menubar to root window
 $root.Controls.Add($menubar)
 
 # Setup everything else
-Register-Commands -menubar $menubar
+Register-Commands -menubar $menubar # Add all commands to the menubar
 if(!$classFilePath) # If the class file path is not defined in run.ps1 open a file dialog to select it
 {
     $dialog = [System.Windows.Forms.OpenFileDialog]::new()
@@ -655,7 +655,7 @@ if(!$classFilePath) # If the class file path is not defined in run.ps1 open a fi
     }
 }
 [Host]::Populate($classFilePath, " ") # Import the class file
-$timer = [System.Windows.Forms.Timer]::new()
+$timer = [System.Windows.Forms.Timer]::new() # Add a timer to call update periodically
 $timer.Interval = 5000
 $timer.Add_Tick({ [Host]::Update() })
 $timer.Start()
