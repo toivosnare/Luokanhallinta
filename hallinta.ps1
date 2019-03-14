@@ -15,13 +15,13 @@
         $this.Mac = $mac
         $this.Column = $column
         $this.Row = $row
-        $this.Ping = Invoke-Command -ComputerName $this.Name -Credential $script:credentials.Main -ScriptBlock {"Hello, World!"} -AsJob
+        $this.Ping = Invoke-Command -ComputerName $this.Name -Credential $script:credentials.Main -ScriptBlock {"Hello, World!"} -AsJob # Creates the initial ping
         [Host]::Hosts += $this
     }
 
     static [void] Populate([String]$path, [String]$delimiter)
     {
-        # Creates [Host] objects from given .csv file
+        # Creates host objects from given .csv file
         Write-Host -NoNewline "Populating from "
         Write-Host -ForegroundColor Yellow $path
         [Host]::Hosts = @()
@@ -67,31 +67,30 @@
     {
         Write-Host "Updating"
         [Host]::Hosts | ForEach-Object {
-            if($admin)
+            if($admin) # Only display host status in admin mode
             {
                 Write-Host -NoNewline ("{0}: " -f $_.Name)
                 Write-Host $_.Ping.State
             }
-            if($_.Ping.State -ne [System.Management.Automation.JobState]::Running)
+            if($_.Ping.State -ne [System.Management.Automation.JobState]::Running) # Check if hosts ping is no longer running
             {
-                $cell = $script:table[($_.Column - 1), ($_.Row - 1)]
-                if($_.Ping.State -eq [System.Management.Automation.JobState]::Completed)
+                $cell = $script:table[($_.Column - 1), ($_.Row - 1)] # Get the cell corresponding with the host
+                if($_.Ping.State -eq [System.Management.Automation.JobState]::Completed) # If the ping completed succesfully
                 {
                     $_.Status = $true
-                    $cell.Style.ForeColor = [System.Drawing.Color]::Green
+                    $cell.Style.ForeColor = [System.Drawing.Color]::Green # Set the text displaying host's name to green
                     $cell.Style.SelectionForeColor = [System.Drawing.Color]::Green
                 }
-                elseif ($_.Ping.State -eq [System.Management.Automation.JobState]::Failed)
+                elseif ($_.Ping.State -eq [System.Management.Automation.JobState]::Failed) # If the ping failed (i.e. no connection could be made)
                 {
                     $_.Status = $false
-                    $cell.Style.ForeColor = [System.Drawing.Color]::Red
+                    $cell.Style.ForeColor = [System.Drawing.Color]::Red # Set the text diplaying host's name to red
                     $cell.Style.SelectionForeColor = [System.Drawing.Color]::Red
                 }
                 Remove-Job $_.Ping
-                $_.Ping = Invoke-Command -ComputerName $_.Name -Credential $script:credentials.Main -ScriptBlock {"Hello, World!"} -AsJob
+                $_.Ping = Invoke-Command -ComputerName $_.Name -Credential $script:credentials.Main -ScriptBlock {"Hello, World!"} -AsJob # Start a new ping for next cycle
             }
-        }
-        
+        }   
     }
 
     static [void] Export([String]$path, [String]$delimiter)
